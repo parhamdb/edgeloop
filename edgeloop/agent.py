@@ -46,6 +46,13 @@ class Agent:
     Usage:
         agent = Agent(endpoint="http://localhost:8080", tools=[my_tool])
         result = await agent.run("Do something")
+
+    KV Cache Strategy:
+        - System prompt + tool schemas are built once and reused (stable prefix)
+        - Messages are append-only within a run (maximizes prefix overlap)
+        - Backends receive structured messages when possible (Ollama /api/chat)
+          so the server can match the prefix and skip re-prefilling cached tokens
+        - For llama-server, the raw prompt is sent with cache_prompt=true
     """
 
     def __init__(
@@ -66,7 +73,6 @@ class Agent:
         if backend is not None:
             self._backend = backend
         elif model is not None:
-            # Ollama backend: model name specified
             self._backend = OllamaBackend(
                 model=model,
                 endpoint=endpoint or "http://localhost:11434",
@@ -85,12 +91,16 @@ class Agent:
         self._max_retries = max_retries
         self._temperature = temperature
 
+        # Build system prompt once — this never changes, maximizing cache reuse
+        self._system_prompt = self._build_system_prompt()
+
         logging.getLogger("edgeloop").setLevel(getattr(logging, log_level.upper()))
 
     def _build_system_prompt(self) -> str:
         """Build deterministic system prompt with tool schemas.
 
         Uses compact format to minimize prefill tokens on local models.
+        Called once at init — the result is cached and reused.
         """
         parts = [self._user_system_prompt]
 
@@ -99,7 +109,6 @@ class Agent:
             for t in self._tools:
                 s = get_schema(t)
                 params = s["parameters"]
-                # Compact format: name(arg:type, arg:type) - description
                 args = []
                 for pname, pschema in sorted(params["properties"].items()):
                     ptype = pschema["type"]
@@ -117,7 +126,10 @@ class Agent:
         return "".join(parts)
 
     def _format_prompt(self, system: str, history: list[dict]) -> str:
-        """Apply chat template to system prompt and message history."""
+        """Apply chat template to produce a raw prompt string.
+
+        Used for backends that need raw text (llama-server).
+        """
         parts = [self._template["system"].format(content=system)]
 
         for msg in history:
@@ -126,23 +138,39 @@ class Agent:
             if role in self._template:
                 parts.append(self._template[role].format(content=content))
 
-        # Add assistant start token to prompt the model
         parts.append(self._template["assistant_start"])
         return "".join(parts)
+
+    def _build_messages(self, history: list[dict]) -> list[dict]:
+        """Build structured messages list for chat-based backends.
+
+        Returns [system_msg, user_msg, assistant_msg, ...] format
+        that Ollama's /api/chat expects.
+        """
+        messages = [{"role": "system", "content": self._system_prompt}]
+        messages.extend(history)
+        return messages
 
     async def run(self, message: str) -> str:
         """Run the agent loop for a single user message.
 
         Returns the agent's final text response.
+
+        KV cache behavior:
+        - Each iteration appends to history (never rewrites earlier messages)
+        - The backend receives the growing message list
+        - Backends with KV cache (Ollama, llama-server) only prefill NEW tokens
         """
-        system = self._build_system_prompt()
         history: list[dict] = [{"role": "user", "content": message}]
 
         for iteration in range(self._max_iterations):
             logger.info("Agent loop iteration %d", iteration + 1)
 
-            prompt = self._format_prompt(system, history)
-            logger.debug("Prompt length: %d chars", len(prompt))
+            # Build both formats — backend picks what it supports
+            prompt = self._format_prompt(self._system_prompt, history)
+            messages = self._build_messages(history)
+
+            logger.debug("Prompt: %d chars, %d messages", len(prompt), len(messages))
 
             # Collect full response from streaming backend
             response_text = ""
@@ -150,6 +178,7 @@ class Agent:
                 prompt,
                 temperature=self._temperature,
                 max_tokens=self._max_tokens,
+                messages=messages,
             ):
                 response_text += token
 
@@ -159,7 +188,6 @@ class Agent:
             tool_call = repair_tool_call(response_text, self._tools)
 
             if tool_call is None:
-                # Check if this looks like a failed tool call (has JSON-like content but couldn't parse)
                 if self._looks_like_broken_tool_call(response_text) and iteration < self._max_retries:
                     logger.warning("Looks like a broken tool call, retrying (attempt %d)", iteration + 1)
                     history.append({"role": "assistant", "content": response_text})
@@ -169,7 +197,6 @@ class Agent:
                     })
                     continue
 
-                # Plain text response — we're done
                 logger.info("Agent returned final response")
                 return response_text
 
@@ -178,7 +205,6 @@ class Agent:
             tool_args = tool_call["arguments"]
             logger.info("Executing tool: %s(%s)", tool_name, tool_args)
 
-            # Find the tool function
             tool_fn = None
             for t in self._tools:
                 if get_schema(t)["name"] == tool_name:
@@ -192,7 +218,7 @@ class Agent:
             result = await execute_tool(tool_fn, tool_args)
             logger.info("Tool result: %s", result[:100])
 
-            # Append assistant tool call and tool result to history
+            # Append to history — append-only preserves KV cache prefix
             history.append({"role": "assistant", "content": response_text})
             history.append({"role": "user", "content": f"Tool '{tool_name}' returned:\n{result}"})
 
@@ -203,12 +229,8 @@ class Agent:
     def _looks_like_broken_tool_call(text: str) -> bool:
         """Heuristic: does this look like a failed attempt at a tool call?"""
         indicators = ['"tool"', "'tool'", "tool_call", "arguments"]
-        strong_match = any(ind in text for ind in indicators)
-        has_brace = "{" in text
-        # Strong match alone is enough; brace-only counts as suspicious too
-        if strong_match:
+        if any(ind in text for ind in indicators):
             return True
-        # Multiple braces with no successful parse = likely broken JSON
-        if has_brace and text.count("{") >= 2:
+        if "{" in text and text.count("{") >= 2:
             return True
         return False

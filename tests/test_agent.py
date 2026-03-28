@@ -24,8 +24,9 @@ class MockBackend:
         self._responses = iter(responses)
         self.prompts = []
 
-    async def complete(self, prompt, stop=None, temperature=0.7, max_tokens=1024):
+    async def complete(self, prompt, stop=None, temperature=0.7, max_tokens=1024, messages=None):
         self.prompts.append(prompt)
+        self.last_messages = messages
         text = next(self._responses)
         for char_chunk in [text]:  # yield whole response as one chunk
             yield char_chunk

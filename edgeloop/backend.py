@@ -1,4 +1,4 @@
-"""LLM backend protocol and llama-server implementation."""
+"""LLM backend protocol and llama-server/Ollama implementations."""
 
 import json
 import logging
@@ -11,7 +11,12 @@ logger = logging.getLogger(__name__)
 
 @runtime_checkable
 class Backend(Protocol):
-    """Protocol for LLM backends. Implement complete() and token_count()."""
+    """Protocol for LLM backends.
+
+    Backends accept either a raw prompt string OR structured messages.
+    The agent prefers messages (better for cache reuse), but falls back
+    to raw prompt for backends that don't support messages.
+    """
 
     async def complete(
         self,
@@ -19,13 +24,19 @@ class Backend(Protocol):
         stop: list[str] | None = None,
         temperature: float = 0.7,
         max_tokens: int = 1024,
+        messages: list[dict] | None = None,
     ) -> AsyncIterator[str]: ...
 
     async def token_count(self, text: str) -> int: ...
 
 
 class LlamaServerBackend:
-    """Backend that talks to llama-server's HTTP API."""
+    """Backend that talks to llama-server's HTTP API.
+
+    Uses /completion endpoint with cache_prompt=true for prefix caching.
+    llama-server automatically reuses KV cache when the prompt shares
+    a common prefix with the previous request on the same slot.
+    """
 
     def __init__(
         self,
@@ -43,8 +54,13 @@ class LlamaServerBackend:
         stop: list[str] | None = None,
         temperature: float = 0.7,
         max_tokens: int = 1024,
+        messages: list[dict] | None = None,
     ) -> AsyncIterator[str]:
-        """Stream completion tokens from llama-server."""
+        """Stream completion tokens from llama-server.
+
+        Uses raw prompt (not messages) since llama-server's /completion
+        endpoint does prefix-based KV cache matching automatically.
+        """
         body: dict = {
             "prompt": prompt,
             "stream": True,
@@ -59,7 +75,10 @@ class LlamaServerBackend:
         if stop:
             body["stop"] = stop
 
-        logger.debug("POST %s/completion (slot=%s, tokens=%d)", self.endpoint, self.slot_id, max_tokens)
+        logger.debug(
+            "POST %s/completion (slot=%s, prompt_chars=%d)",
+            self.endpoint, self.slot_id, len(prompt),
+        )
 
         try:
             async with self._client.stream(
@@ -69,11 +88,10 @@ class LlamaServerBackend:
                     if not line.startswith("data: "):
                         continue
 
-                    data = line[6:]  # Strip "data: " prefix
+                    data = line[6:]
                     try:
                         chunk = json.loads(data)
                     except json.JSONDecodeError:
-                        logger.debug("Skipping non-JSON SSE line: %s", data[:50])
                         continue
 
                     if chunk.get("stop", False):
@@ -87,7 +105,6 @@ class LlamaServerBackend:
         except (httpx.ConnectError, OverflowError, OSError) as e:
             raise ConnectionError(f"Cannot connect to llama-server at {self.endpoint}: {e}") from e
         except BaseException as e:
-            # ExceptionGroup from anyio when port is invalid or connection fails
             if isinstance(e, BaseExceptionGroup):
                 raise ConnectionError(f"Cannot connect to llama-server at {self.endpoint}: {e}") from e
             raise
@@ -105,12 +122,19 @@ class LlamaServerBackend:
             raise ConnectionError(f"Cannot connect to llama-server at {self.endpoint}: {e}") from e
 
     async def close(self):
-        """Close the HTTP client."""
         await self._client.aclose()
 
 
 class OllamaBackend:
-    """Backend that talks to Ollama's HTTP API."""
+    """Backend that talks to Ollama's /api/chat endpoint.
+
+    Uses structured messages (not raw prompts) so Ollama can reuse
+    the KV cache from previous turns. On each call, Ollama only
+    prefills NEW tokens at the end — the shared prefix stays cached.
+
+    This is the key optimization for local models: a 5-turn conversation
+    with 500 total tokens only prefills ~50 new tokens per turn, not 500.
+    """
 
     def __init__(
         self,
@@ -121,7 +145,6 @@ class OllamaBackend:
         self.model = model
         self.endpoint = endpoint.rstrip("/")
         self._client = httpx.AsyncClient(timeout=timeout)
-        self._context: list[int] | None = None  # Ollama's KV cache token context
 
     async def complete(
         self,
@@ -129,12 +152,17 @@ class OllamaBackend:
         stop: list[str] | None = None,
         temperature: float = 0.7,
         max_tokens: int = 1024,
+        messages: list[dict] | None = None,
     ) -> AsyncIterator[str]:
-        """Stream completion tokens from Ollama."""
+        """Stream completion tokens from Ollama.
+
+        Prefers 'messages' (structured chat) over 'prompt' (raw text).
+        Structured messages let Ollama reuse KV cache across turns.
+        """
         body: dict = {
             "model": self.model,
-            "prompt": prompt,
             "stream": True,
+            "think": False,
             "options": {
                 "num_predict": max_tokens,
                 "temperature": temperature,
@@ -144,20 +172,24 @@ class OllamaBackend:
         if stop:
             body["options"]["stop"] = stop
 
-        # Disable thinking mode for Qwen3 models — we want direct responses
-        # for tool calling reliability. Thinking wastes tokens on small models.
-        body["think"] = False
+        # Use /api/chat with messages for KV cache reuse
+        if messages is not None:
+            body["messages"] = messages
+            url = f"{self.endpoint}/api/chat"
+            response_field = "message"
+        else:
+            # Fallback to /api/generate with raw prompt
+            body["prompt"] = prompt
+            url = f"{self.endpoint}/api/generate"
+            response_field = None
 
-        # Pass back the context from the previous response for KV cache reuse
-        if self._context is not None:
-            body["context"] = self._context
-
-        logger.debug("POST %s/api/generate (model=%s, tokens=%d)", self.endpoint, self.model, max_tokens)
+        logger.debug(
+            "POST %s (model=%s, msgs=%d)",
+            url, self.model, len(messages) if messages else 0,
+        )
 
         try:
-            async with self._client.stream(
-                "POST", f"{self.endpoint}/api/generate", json=body
-            ) as response:
+            async with self._client.stream("POST", url, json=body) as response:
                 async for line in response.aiter_lines():
                     if not line.strip():
                         continue
@@ -165,17 +197,28 @@ class OllamaBackend:
                     try:
                         chunk = json.loads(line)
                     except json.JSONDecodeError:
-                        logger.debug("Skipping non-JSON line: %s", line[:50])
                         continue
 
-                    # Capture context for KV cache reuse on next call
                     if chunk.get("done", False):
-                        self._context = chunk.get("context")
-                        logger.debug("Stream complete, context tokens: %d",
-                                     len(self._context) if self._context else 0)
+                        # Log cache stats
+                        pe_count = chunk.get("prompt_eval_count", 0)
+                        pe_dur = chunk.get("prompt_eval_duration", 0)
+                        ev_count = chunk.get("eval_count", 0)
+                        ev_dur = chunk.get("eval_duration", 0)
+                        pe_ms = pe_dur / 1e6 if pe_dur else 0
+                        ev_tps = (ev_count / (ev_dur / 1e9)) if ev_dur > 0 else 0
+                        logger.info(
+                            "Done: prefill=%d tok (%.0fms), gen=%d tok (%.0f tok/s)",
+                            pe_count, pe_ms, ev_count, ev_tps,
+                        )
                         return
 
-                    content = chunk.get("response", "")
+                    # Extract content from chat vs generate format
+                    if response_field:
+                        content = chunk.get(response_field, {}).get("content", "")
+                    else:
+                        content = chunk.get("response", "")
+
                     if content:
                         yield content
 
@@ -183,10 +226,8 @@ class OllamaBackend:
             raise ConnectionError(f"Cannot connect to Ollama at {self.endpoint}: {e}") from e
 
     async def token_count(self, text: str) -> int:
-        """Approximate token count (Ollama doesn't have a tokenize endpoint)."""
-        # Rough heuristic: ~4 chars per token for English text
+        """Approximate token count."""
         return len(text) // 4
 
     async def close(self):
-        """Close the HTTP client."""
         await self._client.aclose()
