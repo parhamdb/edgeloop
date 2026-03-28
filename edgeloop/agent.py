@@ -4,7 +4,7 @@ import json
 import logging
 from typing import Callable
 
-from edgeloop.backend import Backend, LlamaServerBackend
+from edgeloop.backend import Backend, LlamaServerBackend, OllamaBackend
 from edgeloop.repair import repair_tool_call
 from edgeloop.tools import get_schema, execute_tool
 
@@ -50,6 +50,7 @@ class Agent:
         self,
         endpoint: str | None = None,
         backend: Backend | None = None,
+        model: str | None = None,
         tools: list[Callable] | None = None,
         system_prompt: str = "You are a helpful assistant.",
         template: str = "chatml",
@@ -62,10 +63,16 @@ class Agent:
     ):
         if backend is not None:
             self._backend = backend
+        elif model is not None:
+            # Ollama backend: model name specified
+            self._backend = OllamaBackend(
+                model=model,
+                endpoint=endpoint or "http://localhost:11434",
+            )
         elif endpoint is not None:
             self._backend = LlamaServerBackend(endpoint, slot_id=slot_id)
         else:
-            raise ValueError("Either 'endpoint' or 'backend' must be provided")
+            raise ValueError("Either 'endpoint', 'backend', or 'model' must be provided")
 
         self._tools = tools or []
         self._user_system_prompt = system_prompt
