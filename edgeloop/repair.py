@@ -133,16 +133,36 @@ def fuzzy_match_tool(name: str, available: list[str], max_distance: int = 2) -> 
 
 
 def coerce_arguments(args: dict, schema: dict) -> dict:
-    """Coerce argument types to match schema, strip extras, add defaults."""
+    """Coerce argument types to match schema, strip extras, add defaults.
+
+    Handles common local model mistakes:
+    - Wrong argument names (maps positionally if names don't match)
+    - Wrong types (coerces str→int, str→float, str→bool)
+    - Extra fields (stripped)
+    - Missing optional fields (defaults added)
+    """
     properties = schema.get("properties", {})
+    required = schema.get("required", [])
     result = {}
 
-    # Add known properties with coercion
+    # First try: direct name matching
     for key, prop_schema in properties.items():
         if key in args:
             result[key] = _coerce_value(args[key], prop_schema)
         elif "default" in prop_schema:
             result[key] = prop_schema["default"]
+
+    # If we're missing required args but have unmatched values, try positional mapping
+    missing_required = [k for k in required if k not in result]
+    if missing_required:
+        unmatched_values = [v for k, v in args.items() if k not in properties]
+        if unmatched_values:
+            prop_list = list(properties.keys())
+            for i, key in enumerate(missing_required):
+                if i < len(unmatched_values):
+                    prop_schema = properties[key]
+                    result[key] = _coerce_value(unmatched_values[i], prop_schema)
+                    logger.debug("Positionally mapped arg %d → '%s'", i, key)
 
     return result
 

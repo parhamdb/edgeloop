@@ -11,13 +11,12 @@ from edgeloop.tools import get_schema, execute_tool
 logger = logging.getLogger(__name__)
 
 TOOL_CALL_FORMAT = """\
-IMPORTANT: You MUST use the available tools to complete tasks. Do NOT guess or compute answers yourself.
+IMPORTANT: You MUST use tools. Do NOT guess answers.
 
-To call a tool, respond with ONLY a JSON object in this exact format:
-{"tool": "tool_name", "arguments": {"arg1": "value1"}}
+To call a tool, respond with ONLY a JSON object like:
+{"tool": "tool_name_here", "arguments": {"param_name": "value"}}
 
-When you have the final answer (after using tools), respond with plain text (no JSON).
-Always use tools when they are relevant. Never skip a tool call to guess the answer."""
+Use the exact parameter names shown above for each tool. After getting tool results, respond with plain text."""
 
 CHAT_TEMPLATES = {
     "chatml": {
@@ -89,16 +88,31 @@ class Agent:
         logging.getLogger("edgeloop").setLevel(getattr(logging, log_level.upper()))
 
     def _build_system_prompt(self) -> str:
-        """Build deterministic system prompt with tool schemas."""
+        """Build deterministic system prompt with tool schemas.
+
+        Uses compact format to minimize prefill tokens on local models.
+        """
         parts = [self._user_system_prompt]
 
         if self._tools:
-            parts.append("\n\n## Available Tools\n")
-            schemas = []
+            parts.append("\n\nTools:\n")
             for t in self._tools:
-                schemas.append(get_schema(t))
-            parts.append(json.dumps(schemas, indent=2, sort_keys=True))
-            parts.append("\n\n" + TOOL_CALL_FORMAT)
+                s = get_schema(t)
+                params = s["parameters"]
+                # Compact format: name(arg:type, arg:type) - description
+                args = []
+                for pname, pschema in sorted(params["properties"].items()):
+                    ptype = pschema["type"]
+                    required = pname in params.get("required", [])
+                    default = pschema.get("default")
+                    arg_str = f"{pname}:{ptype}"
+                    if not required and default is not None:
+                        arg_str += f"={default}"
+                    elif not required:
+                        arg_str += "?"
+                    args.append(arg_str)
+                parts.append(f"- {s['name']}({', '.join(args)}) — {s['description']}\n")
+            parts.append("\n" + TOOL_CALL_FORMAT)
 
         return "".join(parts)
 

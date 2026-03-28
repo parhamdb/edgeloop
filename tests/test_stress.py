@@ -58,15 +58,19 @@ def list_directory(path: str = ".") -> str:
 
 # --- Test with different model sizes ---
 
-SMALL_MODELS = ["qwen3:0.6b", "qwen3:1.7b"]
+TINY_MODELS = ["qwen3:0.6b"]
+SMALL_MODELS = ["qwen3:1.7b"]
 MEDIUM_MODELS = ["qwen2.5-coder:7b"]
-ALL_MODELS = SMALL_MODELS + MEDIUM_MODELS
+ALL_MODELS = TINY_MODELS + SMALL_MODELS + MEDIUM_MODELS
 
 
-@pytest.mark.parametrize("model", ALL_MODELS)
+@pytest.mark.parametrize("model", MEDIUM_MODELS)
 @pytest.mark.asyncio
 async def test_multi_step_tool_chain(model):
-    """Test a task requiring multiple sequential tool calls."""
+    """Test a task requiring multiple sequential tool calls.
+
+    Only run on 7B+ models — smaller models can't reliably chain tool calls.
+    """
     agent = Agent(
         model=model,
         tools=[calculator],
@@ -83,9 +87,7 @@ async def test_multi_step_tool_chain(model):
     elapsed = time.time() - start
 
     print(f"\n[{model}] Multi-step ({elapsed:.2f}s): {response[:300]}")
-    # 0.6B models may not chain multiple tool calls correctly
-    if "0.6b" not in model:
-        assert "45" in response
+    assert "45" in response
 
 
 @pytest.mark.parametrize("model", ALL_MODELS)

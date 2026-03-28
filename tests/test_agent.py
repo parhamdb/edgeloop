@@ -41,7 +41,7 @@ class TestPromptBuilding:
         prompt = agent._build_system_prompt()
         assert "read_file" in prompt
         assert "write_file" in prompt
-        assert '"path"' in prompt
+        assert "path" in prompt
         assert "Read a file from disk" in prompt
 
     def test_system_prompt_is_deterministic(self):
