@@ -144,6 +144,10 @@ class OllamaBackend:
         if stop:
             body["options"]["stop"] = stop
 
+        # Disable thinking mode for Qwen3 models — we want direct responses
+        # for tool calling reliability. Thinking wastes tokens on small models.
+        body["think"] = False
+
         # Pass back the context from the previous response for KV cache reuse
         if self._context is not None:
             body["context"] = self._context

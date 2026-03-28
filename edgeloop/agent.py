@@ -11,10 +11,13 @@ from edgeloop.tools import get_schema, execute_tool
 logger = logging.getLogger(__name__)
 
 TOOL_CALL_FORMAT = """\
-When you need to use a tool, respond with ONLY a JSON object in this exact format:
+IMPORTANT: You MUST use the available tools to complete tasks. Do NOT guess or compute answers yourself.
+
+To call a tool, respond with ONLY a JSON object in this exact format:
 {"tool": "tool_name", "arguments": {"arg1": "value1"}}
 
-When you have the final answer, respond with plain text (no JSON)."""
+When you have the final answer (after using tools), respond with plain text (no JSON).
+Always use tools when they are relevant. Never skip a tool call to guess the answer."""
 
 CHAT_TEMPLATES = {
     "chatml": {
