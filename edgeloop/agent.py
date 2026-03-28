@@ -5,18 +5,18 @@ import logging
 from typing import Callable
 
 from edgeloop.backend import Backend, LlamaServerBackend, OllamaBackend
+from edgeloop.cache import CacheManager
 from edgeloop.repair import repair_tool_call
 from edgeloop.tools import get_schema, execute_tool
 
 logger = logging.getLogger(__name__)
 
 TOOL_CALL_FORMAT = """\
-IMPORTANT: You MUST use tools. Do NOT guess answers.
-
-To call a tool, respond with ONLY a JSON object like:
+When a task requires a tool, call it with ONLY a JSON object:
 {"tool": "tool_name_here", "arguments": {"param_name": "value"}}
 
-Use the exact parameter names shown above for each tool. After getting tool results, respond with plain text."""
+Use exact parameter names shown above. After getting tool results, respond with plain text.
+If you can answer without tools, respond directly with plain text."""
 
 CHAT_TEMPLATES = {
     "chatml": {
@@ -48,11 +48,10 @@ class Agent:
         result = await agent.run("Do something")
 
     KV Cache Strategy:
-        - System prompt + tool schemas are built once and reused (stable prefix)
-        - Messages are append-only within a run (maximizes prefix overlap)
-        - Backends receive structured messages when possible (Ollama /api/chat)
-          so the server can match the prefix and skip re-prefilling cached tokens
-        - For llama-server, the raw prompt is sent with cache_prompt=true
+        - System prompt built once at init (stable prefix)
+        - Messages append-only within a run (maximizes cache overlap)
+        - Backends receive structured messages when supported
+        - CacheManager tracks prefill stats and advises on truncation
     """
 
     def __init__(
@@ -83,26 +82,24 @@ class Agent:
             raise ValueError("Either 'endpoint', 'backend', or 'model' must be provided")
 
         self._tools = tools or []
-        self._user_system_prompt = system_prompt
         self._template_name = template
         self._template = CHAT_TEMPLATES[template]
-        self._max_tokens = max_tokens
         self._max_iterations = max_iterations
         self._max_retries = max_retries
         self._temperature = temperature
 
-        # Build system prompt once — this never changes, maximizing cache reuse
-        self._system_prompt = self._build_system_prompt()
+        # Build system prompt once — stable prefix for KV cache
+        self._system_prompt = self._build_system_prompt(system_prompt)
+
+        # Cache manager tracks prefill efficiency
+        self.cache = CacheManager(max_context_tokens=max_tokens)
+        self.cache.system_prompt_tokens = len(self._system_prompt) // 4  # rough estimate
 
         logging.getLogger("edgeloop").setLevel(getattr(logging, log_level.upper()))
 
-    def _build_system_prompt(self) -> str:
-        """Build deterministic system prompt with tool schemas.
-
-        Uses compact format to minimize prefill tokens on local models.
-        Called once at init — the result is cached and reused.
-        """
-        parts = [self._user_system_prompt]
+    def _build_system_prompt(self, user_prompt: str) -> str:
+        """Build deterministic system prompt with tool schemas."""
+        parts = [user_prompt]
 
         if self._tools:
             parts.append("\n\nTools:\n")
@@ -126,10 +123,7 @@ class Agent:
         return "".join(parts)
 
     def _format_prompt(self, system: str, history: list[dict]) -> str:
-        """Apply chat template to produce a raw prompt string.
-
-        Used for backends that need raw text (llama-server).
-        """
+        """Apply chat template to produce a raw prompt string."""
         parts = [self._template["system"].format(content=system)]
 
         for msg in history:
@@ -142,45 +136,68 @@ class Agent:
         return "".join(parts)
 
     def _build_messages(self, history: list[dict]) -> list[dict]:
-        """Build structured messages list for chat-based backends.
-
-        Returns [system_msg, user_msg, assistant_msg, ...] format
-        that Ollama's /api/chat expects.
-        """
+        """Build structured messages for chat-based backends."""
         messages = [{"role": "system", "content": self._system_prompt}]
         messages.extend(history)
         return messages
 
-    async def run(self, message: str) -> str:
-        """Run the agent loop for a single user message.
+    def _truncate_history(self, history: list[dict]) -> list[dict]:
+        """Truncate history when approaching context limit.
 
-        Returns the agent's final text response.
-
-        KV cache behavior:
-        - Each iteration appends to history (never rewrites earlier messages)
-        - The backend receives the growing message list
-        - Backends with KV cache (Ollama, llama-server) only prefill NEW tokens
+        Keeps the first user message and the most recent turns.
+        Inserts a summary marker so the model knows context was trimmed.
         """
+        if not self.cache.needs_truncation or len(history) <= 3:
+            return history
+
+        # Keep first message + last N messages that fit
+        target = self.cache.truncation_target()
+        # Estimate: each message ~50 tokens average
+        keep_count = max(3, target // 50)
+
+        if keep_count >= len(history):
+            return history
+
+        first = history[0]
+        recent = history[-keep_count:]
+        trimmed_count = len(history) - keep_count - 1
+
+        logger.info("Truncating history: dropping %d middle messages, keeping %d", trimmed_count, keep_count)
+
+        return [first, {"role": "user", "content": f"[{trimmed_count} earlier messages omitted]"}] + recent
+
+    async def run(self, message: str) -> str:
+        """Run the agent loop for a single user message."""
         history: list[dict] = [{"role": "user", "content": message}]
 
         for iteration in range(self._max_iterations):
             logger.info("Agent loop iteration %d", iteration + 1)
 
+            # Truncate if approaching context limit
+            history = self._truncate_history(history)
+
             # Build both formats — backend picks what it supports
             prompt = self._format_prompt(self._system_prompt, history)
             messages = self._build_messages(history)
 
-            logger.debug("Prompt: %d chars, %d messages", len(prompt), len(messages))
+            # Update cache manager with current token estimate
+            self.cache.update_history_tokens(len(prompt) // 4)
 
-            # Collect full response from streaming backend
+            logger.debug("Prompt: %d chars, %d messages, ~%d tokens", len(prompt), len(messages), self.cache.total_tokens)
+
+            # Collect full response
             response_text = ""
             async for token in self._backend.complete(
                 prompt,
                 temperature=self._temperature,
-                max_tokens=self._max_tokens,
+                max_tokens=max(256, self.cache.remaining_tokens),
                 messages=messages,
             ):
                 response_text += token
+
+            # Record cache stats from backend
+            if hasattr(self._backend, 'last_cache_stats') and self._backend.last_cache_stats:
+                self.cache.record(self._backend.last_cache_stats)
 
             logger.debug("Raw LLM output: %s", response_text[:200])
 
@@ -189,15 +206,16 @@ class Agent:
 
             if tool_call is None:
                 if self._looks_like_broken_tool_call(response_text) and iteration < self._max_retries:
-                    logger.warning("Looks like a broken tool call, retrying (attempt %d)", iteration + 1)
+                    logger.warning("Broken tool call, retrying (attempt %d)", iteration + 1)
                     history.append({"role": "assistant", "content": response_text})
                     history.append({
                         "role": "user",
-                        "content": "Your response was not valid. Please respond with either a valid tool call JSON or a plain text answer.\n\n" + TOOL_CALL_FORMAT,
+                        "content": "Your response was not valid. Respond with a valid tool call JSON or plain text.\n\n" + TOOL_CALL_FORMAT,
                     })
                     continue
 
-                logger.info("Agent returned final response")
+                logger.info("Final response")
+                self.cache.log_summary()
                 return response_text
 
             # Execute tool
@@ -212,22 +230,21 @@ class Agent:
                     break
 
             if tool_fn is None:
-                logger.error("Tool '%s' not found after repair", tool_name)
                 return f"Error: Tool '{tool_name}' not found"
 
             result = await execute_tool(tool_fn, tool_args)
             logger.info("Tool result: %s", result[:100])
 
-            # Append to history — append-only preserves KV cache prefix
+            # Append-only — preserves KV cache prefix
             history.append({"role": "assistant", "content": response_text})
             history.append({"role": "user", "content": f"Tool '{tool_name}' returned:\n{result}"})
 
         logger.warning("Maximum iterations (%d) reached", self._max_iterations)
+        self.cache.log_summary()
         return f"Error: Maximum iterations ({self._max_iterations}) reached. Last response: {response_text[:200]}"
 
     @staticmethod
     def _looks_like_broken_tool_call(text: str) -> bool:
-        """Heuristic: does this look like a failed attempt at a tool call?"""
         indicators = ['"tool"', "'tool'", "tool_call", "arguments"]
         if any(ind in text for ind in indicators):
             return True

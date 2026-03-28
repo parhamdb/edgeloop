@@ -2,27 +2,28 @@
 
 from typing import AsyncIterator, Protocol, runtime_checkable
 
+from edgeloop.cache import CacheStats
+
 
 @runtime_checkable
 class Backend(Protocol):
     """Protocol for LLM backends.
 
-    Any object with these two methods satisfies the protocol.
+    Any object with these methods satisfies the protocol.
     No inheritance needed — just implement the methods.
-
-    The 'messages' parameter enables KV cache reuse for backends
-    that support structured chat (Ollama /api/chat). Backends that
-    use raw prompts (llama-server) can ignore it.
 
     To implement a new backend:
         class MyBackend:
             async def complete(self, prompt, stop=None, temperature=0.7,
-                             max_tokens=1024, messages=None):
-                async for token in my_stream(...):
-                    yield token
+                             max_tokens=1024, messages=None) -> AsyncIterator[str]:
+                ...yield tokens...
 
-            async def token_count(self, text):
+            async def token_count(self, text) -> int:
                 return len(my_tokenizer.encode(text))
+
+            @property
+            def last_cache_stats(self) -> CacheStats | None:
+                return self._last_stats
     """
 
     async def complete(
@@ -33,20 +34,18 @@ class Backend(Protocol):
         max_tokens: int = 1024,
         messages: list[dict] | None = None,
     ) -> AsyncIterator[str]:
-        """Stream completion tokens.
-
-        Args:
-            prompt: Raw text prompt (with chat template applied).
-            stop: Stop sequences to end generation.
-            temperature: Sampling temperature.
-            max_tokens: Maximum tokens to generate.
-            messages: Optional structured messages for chat-based backends.
-                      Format: [{"role": "system", "content": "..."}, ...]
-                      Backends that support this should prefer it over prompt
-                      for better KV cache reuse.
-        """
+        """Stream completion tokens."""
         ...
 
     async def token_count(self, text: str) -> int:
-        """Count tokens in text. Used for context budget tracking."""
+        """Count tokens in text."""
+        ...
+
+    @property
+    def last_cache_stats(self) -> CacheStats | None:
+        """Cache stats from the most recent complete() call.
+
+        Returns None if no completion has been done yet.
+        Backends should populate this after each streaming response completes.
+        """
         ...

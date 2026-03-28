@@ -39,17 +39,16 @@ class MockBackend:
 class TestPromptBuilding:
     def test_system_prompt_includes_tool_schemas(self):
         agent = Agent(backend=MockBackend([]), tools=[read_file, write_file])
-        prompt = agent._build_system_prompt()
+        prompt = agent._system_prompt
         assert "read_file" in prompt
         assert "write_file" in prompt
         assert "path" in prompt
         assert "Read a file from disk" in prompt
 
     def test_system_prompt_is_deterministic(self):
-        agent = Agent(backend=MockBackend([]), tools=[read_file, write_file])
-        p1 = agent._build_system_prompt()
-        p2 = agent._build_system_prompt()
-        assert p1 == p2
+        agent1 = Agent(backend=MockBackend([]), tools=[read_file, write_file])
+        agent2 = Agent(backend=MockBackend([]), tools=[read_file, write_file])
+        assert agent1._system_prompt == agent2._system_prompt
 
     def test_format_prompt_chatml(self):
         agent = Agent(backend=MockBackend([]), tools=[read_file], template="chatml")
@@ -64,7 +63,7 @@ class TestPromptBuilding:
         agent = Agent(backend=MockBackend([]), tools=[read_file], template="chatml")
         history1 = [{"role": "user", "content": "first"}]
         history2 = [{"role": "user", "content": "first"}, {"role": "assistant", "content": "reply"}, {"role": "user", "content": "second"}]
-        sys_prompt = agent._build_system_prompt()
+        sys_prompt = agent._system_prompt
         p1 = agent._format_prompt(sys_prompt, history1)
         p2 = agent._format_prompt(sys_prompt, history2)
         # p2 must start with the same bytes as p1 (minus the trailing assistant marker)

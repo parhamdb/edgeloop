@@ -1,7 +1,7 @@
 import json
 import pytest
 import httpx
-from unittest.mock import AsyncMock, patch, MagicMock
+from unittest.mock import AsyncMock, patch, MagicMock, PropertyMock
 from edgeloop.backend import Backend, LlamaServerBackend
 
 
@@ -12,18 +12,25 @@ def test_backend_protocol():
     assert hasattr(backend, "token_count")
 
 
+def _mock_backend_client(backend):
+    """Patch the connection's client on a backend for testing."""
+    mock_client = MagicMock()
+    backend._conn._client = mock_client
+    return mock_client
+
+
 @pytest.mark.asyncio
 async def test_token_count():
     backend = LlamaServerBackend("http://localhost:8080")
+    mock_client = _mock_backend_client(backend)
 
     mock_response = MagicMock()
     mock_response.status_code = 200
     mock_response.json.return_value = {"tokens": [1, 2, 3, 4, 5]}
     mock_response.raise_for_status = MagicMock()
+    mock_client.post = AsyncMock(return_value=mock_response)
 
-    with patch.object(backend, "_client") as mock_client:
-        mock_client.post = AsyncMock(return_value=mock_response)
-        count = await backend.token_count("Hello world")
+    count = await backend.token_count("Hello world")
 
     assert count == 5
     mock_client.post.assert_called_once()
@@ -35,6 +42,7 @@ async def test_token_count():
 @pytest.mark.asyncio
 async def test_complete_streaming():
     backend = LlamaServerBackend("http://localhost:8080")
+    mock_client = _mock_backend_client(backend)
 
     sse_lines = [
         b'data: {"content": "Hello", "stop": false}\n\n',
@@ -46,13 +54,11 @@ async def test_complete_streaming():
     mock_stream.__aenter__ = AsyncMock(return_value=mock_stream)
     mock_stream.__aexit__ = AsyncMock(return_value=False)
     mock_stream.aiter_lines = _async_iter_lines(sse_lines)
+    mock_client.stream = MagicMock(return_value=mock_stream)
 
-    with patch.object(backend, "_client") as mock_client:
-        mock_client.stream = MagicMock(return_value=mock_stream)
-
-        tokens = []
-        async for token in backend.complete("Test prompt"):
-            tokens.append(token)
+    tokens = []
+    async for token in backend.complete("Test prompt"):
+        tokens.append(token)
 
     assert tokens == ["Hello", " World"]
 
@@ -60,18 +66,17 @@ async def test_complete_streaming():
 @pytest.mark.asyncio
 async def test_complete_passes_slot_id():
     backend = LlamaServerBackend("http://localhost:8080", slot_id=3)
+    mock_client = _mock_backend_client(backend)
 
     sse_lines = [b'data: {"content": "ok", "stop": true}\n\n']
     mock_stream = AsyncMock()
     mock_stream.__aenter__ = AsyncMock(return_value=mock_stream)
     mock_stream.__aexit__ = AsyncMock(return_value=False)
     mock_stream.aiter_lines = _async_iter_lines(sse_lines)
+    mock_client.stream = MagicMock(return_value=mock_stream)
 
-    with patch.object(backend, "_client") as mock_client:
-        mock_client.stream = MagicMock(return_value=mock_stream)
-
-        async for _ in backend.complete("Test"):
-            pass
+    async for _ in backend.complete("Test"):
+        pass
 
     call_kwargs = mock_client.stream.call_args
     body = call_kwargs.kwargs.get("json") or call_kwargs[1].get("json")
@@ -82,18 +87,17 @@ async def test_complete_passes_slot_id():
 @pytest.mark.asyncio
 async def test_complete_passes_stop_sequences():
     backend = LlamaServerBackend("http://localhost:8080")
+    mock_client = _mock_backend_client(backend)
 
     sse_lines = [b'data: {"content": "ok", "stop": true}\n\n']
     mock_stream = AsyncMock()
     mock_stream.__aenter__ = AsyncMock(return_value=mock_stream)
     mock_stream.__aexit__ = AsyncMock(return_value=False)
     mock_stream.aiter_lines = _async_iter_lines(sse_lines)
+    mock_client.stream = MagicMock(return_value=mock_stream)
 
-    with patch.object(backend, "_client") as mock_client:
-        mock_client.stream = MagicMock(return_value=mock_stream)
-
-        async for _ in backend.complete("Test", stop=["<|end|>", "\n\n"]):
-            pass
+    async for _ in backend.complete("Test", stop=["<|end|>", "\n\n"]):
+        pass
 
     call_kwargs = mock_client.stream.call_args
     body = call_kwargs.kwargs.get("json") or call_kwargs[1].get("json")
