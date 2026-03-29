@@ -37,6 +37,39 @@ pub fn create_transports(config: &crate::config::Config) -> Result<Vec<Box<dyn T
                 let cfg = config.transport.cli.clone().unwrap_or(crate::config::CliTransportConfig { prompt: "you> ".into() });
                 transports.push(Box::new(cli::CliTransport::new(cfg)));
             }
+            #[cfg(feature = "websocket")]
+            "websocket" => {
+                let cfg = config.transport.websocket.clone().unwrap_or(crate::config::WsTransportConfig {
+                    host: "0.0.0.0".into(),
+                    port: 8888,
+                    path: "/agent".into(),
+                });
+                transports.push(Box::new(websocket::WebSocketTransport::new(cfg)));
+            }
+            #[cfg(feature = "mqtt")]
+            "mqtt" => {
+                if let Some(cfg) = config.transport.mqtt.clone() {
+                    transports.push(Box::new(mqtt::MqttTransport::new(cfg)));
+                } else {
+                    tracing::warn!("Transport 'mqtt' requested but [transport.mqtt] config is missing");
+                }
+            }
+            #[cfg(feature = "unix-socket")]
+            "unix-socket" => {
+                if let Some(cfg) = config.transport.unix.clone() {
+                    transports.push(Box::new(socket::UnixSocketTransport::new(cfg)));
+                } else {
+                    tracing::warn!("Transport 'unix-socket' requested but [transport.unix] config is missing");
+                }
+            }
+            #[cfg(feature = "tcp-socket")]
+            "tcp-socket" => {
+                if let Some(cfg) = config.transport.tcp.clone() {
+                    transports.push(Box::new(socket::TcpSocketTransport::new(cfg)));
+                } else {
+                    tracing::warn!("Transport 'tcp-socket' requested but [transport.tcp] config is missing");
+                }
+            }
             other => { tracing::warn!("Transport '{}' not implemented or not compiled in", other); }
         }
     }
