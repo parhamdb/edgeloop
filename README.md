@@ -2,28 +2,9 @@
 
 Minimal agentic framework for local LLMs. Built for edge devices, optimized for speed.
 
-edgeloop runs agent loops against local models (llama.cpp, Ollama) with aggressive KV cache management and output repair for small models. Two dependencies. Five core files. Sub-second tool calls on consumer GPUs.
-
-## Why edgeloop
-
-Cloud agentic frameworks (Strands, LangChain, CrewAI) are designed for powerful API models. On local hardware:
-
-- **Prefill dominates latency** — long conversations thrash the KV cache
-- **Small models break tool calls** — malformed JSON, wrong argument names, hallucinated tools
-- **Every token counts** — bloated system prompts waste prefill time
-
-edgeloop treats these as first-class problems, not afterthoughts.
-
-## Quick Start
-
-```bash
-pip install -e .
-```
-
-### As a library
+edgeloop runs agent loops against local models (llama.cpp, Ollama) with KV cache-aware prompt management and output repair for small models. Two dependencies. 1,300 lines of Python. Sub-second tool calls on consumer GPUs.
 
 ```python
-import asyncio
 from edgeloop import Agent, tool
 
 @tool
@@ -31,129 +12,74 @@ def calculator(expression: str) -> str:
     """Evaluate a math expression."""
     return str(eval(expression))
 
-async def main():
-    # With Ollama
-    agent = Agent(model="qwen2.5-coder:7b", tools=[calculator])
-    print(await agent.run("What is 847 + 253?"))
+agent = Agent(model="qwen2.5-coder:7b", tools=[calculator])
+# await agent.run("What is 847 + 253?")  → calls calculator → "1100"
+```
 
-    # With llama-server
-    agent = Agent(endpoint="http://localhost:8080", tools=[calculator])
-    print(await agent.run("What is 847 + 253?"))
+## Why
+
+Cloud agentic frameworks are designed for powerful API models. On local hardware the problems are different:
+
+- **Prefill dominates latency.** Long conversations cause KV cache thrashing. edgeloop uses structured messages, stable prompt prefixes, and append-only history to maximize cache reuse (measured: 14x prefill speedup).
+- **Small models break tool calls.** Malformed JSON, wrong argument names, hallucinated tools. edgeloop includes a repair pipeline that fixes common mistakes before execution.
+- **Every token counts.** edgeloop uses a compact tool schema format (~40% fewer tokens than JSON schema) and tracks context budget to truncate before overflow.
+
+## Install
+
+```bash
+pip install -e .
+```
+
+Runtime dependencies: `httpx`, `click`. That's it.
+
+## Usage
+
+### Library
+
+```python
+import asyncio
+from edgeloop import Agent, tool
+
+@tool
+def read_file(path: str) -> str:
+    """Read a file from disk."""
+    with open(path) as f:
+        return f.read()
+
+@tool
+def calculator(expression: str) -> str:
+    """Evaluate a math expression."""
+    return str(eval(expression))
+
+async def main():
+    # Ollama backend (default)
+    agent = Agent(model="qwen2.5-coder:7b", tools=[read_file, calculator])
+    print(await agent.run("What is 123 * 456? Use the calculator."))
+
+    # llama-server backend (2-12x faster)
+    agent = Agent(
+        endpoint="http://localhost:8080",
+        tools=[read_file, calculator],
+        template="chatml",
+    )
+    print(await agent.run("Read pyproject.toml and tell me the version."))
 
 asyncio.run(main())
 ```
 
-### As a CLI
+### CLI
 
 ```bash
-# Interactive chat with Ollama
+# Ollama
 edgeloop chat --endpoint http://localhost:11434 --tools ./my_tools.py
 
-# Interactive chat with llama-server
+# llama-server
 edgeloop chat --endpoint http://localhost:8080 --tools ./my_tools.py --template chatml
-```
-
-## Architecture
-
-```
-edgeloop/
-├── agent.py                # Agent class, ReAct loop, chat templates
-├── cache.py                # KV cache tracking and optimization
-├── connection.py           # Shared HTTP connection pool
-├── tools.py                # @tool decorator, schema generation
-├── repair.py               # JSON repair, fuzzy matching, type coercion
-├── cli.py                  # Click CLI
-└── backends/
-    ├── protocol.py         # Backend protocol (2 methods)
-    ├── ollama.py           # Ollama /api/chat backend
-    └── llama_server.py     # llama-server /completion backend
-```
-
-### Agent Loop
-
-```
-User message
-    ↓
-Build prompt (system + tool schemas + history)
-    ↓
-Send to backend (streaming) ←─────────────┐
-    ↓                                      │
-Parse output → repair if malformed         │
-    ↓                                      │
-Tool call? ──yes──→ execute → append ──────┘
-    │
-    no
-    ↓
-Return response
-```
-
-### KV Cache Strategy
-
-Every design decision serves prefill efficiency:
-
-1. **Stable prompt prefix** — system prompt + tool schemas built once at init, never changes. Same agent config = same prefix = automatic cache hit.
-2. **Append-only history** — new turns append to the end. The backend only prefills new tokens.
-3. **Structured messages** — Ollama backend uses `/api/chat` (not `/api/generate`) so the server matches the message prefix and skips cached tokens.
-4. **Slot pinning** — llama-server backend uses `id_slot` + `cache_prompt=true` for explicit prefix-based caching.
-5. **Context truncation** — when approaching the limit, oldest turns are dropped while the system prompt stays pinned.
-
-Measured improvement: **14x prefill speedup** (55ms cold → 4ms warm) on consecutive requests.
-
-### Output Repair
-
-Small models (0.6B-3B) regularly produce broken tool calls. The repair pipeline runs on every response:
-
-1. **JSON extraction** — finds JSON in markdown fences, XML tags, or raw text
-2. **JSON repair** — fixes trailing commas, single quotes, unmatched braces
-3. **Fuzzy tool matching** — corrects `"red_file"` → `"read_file"` (Levenshtein distance ≤ 2)
-4. **Positional arg mapping** — when model uses wrong param names but right values
-5. **Type coercion** — casts `"42"` → `42` if schema says integer
-6. **Retry with feedback** — if repair fails, injects error into context and retries
-
-## Tools
-
-Tools are plain Python functions with a decorator:
-
-```python
-from edgeloop import tool
-
-@tool
-def search_web(query: str, max_results: int = 5) -> str:
-    """Search the web and return results."""
-    # Your implementation here
-    return results
-```
-
-The `@tool` decorator:
-- Extracts function signature → JSON schema for the LLM
-- Extracts docstring → tool description
-- Wraps execution with timeout and error capture
-- Does **not** alter the function's normal behavior — still callable as a regular function
-
-## Backends
-
-### Ollama (recommended for getting started)
-
-```python
-agent = Agent(model="qwen2.5-coder:7b")
-```
-
-Uses Ollama's `/api/chat` endpoint. Install models with `ollama pull`.
-
-### llama-server (recommended for performance)
-
-```python
-agent = Agent(endpoint="http://localhost:8080", template="chatml")
-```
-
-2-12x faster than Ollama due to no middleware overhead. Start with:
-```bash
-llama-server -m model.gguf --port 8080 -ngl 99 -c 4096
 ```
 
 ### Custom backend
 
-Implement two methods:
+Any object with `complete()` and `token_count()` works:
 
 ```python
 class MyBackend:
@@ -163,95 +89,130 @@ class MyBackend:
             yield token
 
     async def token_count(self, text):
-        return len(text) // 4  # or use a real tokenizer
+        return len(text) // 4
 
 agent = Agent(backend=MyBackend(), tools=[...])
 ```
 
-### Shared connections
+## Architecture
 
-```python
-from edgeloop import Connection, OllamaBackend, Agent
-
-conn = Connection("http://localhost:11434", max_keepalive=5)
-backend = OllamaBackend(model="qwen2.5-coder:7b", connection=conn)
-agent = Agent(backend=backend, tools=[...])
 ```
+edgeloop/
+├── agent.py              # Agent class, ReAct loop, prompt templates
+├── tools.py              # @tool decorator, schema extraction, execution
+├── repair.py             # JSON repair, fuzzy matching, type coercion
+├── cache.py              # KV cache tracking, context budget, truncation
+├── connection.py         # Shared HTTP connection pool
+├── cli.py                # Click CLI
+└── backends/
+    ├── protocol.py       # Backend protocol (2 methods)
+    ├── ollama.py         # Ollama /api/chat with KV cache reuse
+    └── llama_server.py   # llama-server /completion with slot pinning
+```
+
+### Agent loop
+
+```
+User message → Build prompt → Send to backend (streaming)
+                                      ↓
+                               Parse + repair output
+                                      ↓
+                              Tool call? → Execute → Append result → Loop
+                                  │
+                                  no → Return response
+```
+
+### KV cache strategy
+
+1. **Stable prefix.** System prompt built once at init. Same config = same prefix = cache hit.
+2. **Append-only.** New turns append to history. Backend only prefills new tokens at the end.
+3. **Structured messages.** Ollama gets `[system, user, assistant, ...]` via `/api/chat` so it can match the prefix and skip cached tokens.
+4. **Slot pinning.** llama-server gets `id_slot` + `cache_prompt=true` for explicit prefix-based caching.
+5. **Truncation.** When context fills up, oldest turns are dropped while system prompt stays pinned.
+
+### Output repair
+
+Runs on every LLM response. Handles what small models get wrong:
+
+1. **JSON extraction** — markdown fences, XML tags, raw JSON in text
+2. **JSON repair** — trailing commas, single quotes, unmatched braces
+3. **Fuzzy tool match** — `"red_file"` → `"read_file"` (Levenshtein ≤ 2)
+4. **Positional arg mapping** — wrong param names but right values
+5. **Type coercion** — `"42"` → `42` when schema says integer
+6. **Retry** — if repair fails, inject error and ask the model to try again
 
 ## Configuration
 
 ```python
 Agent(
-    # Backend (pick one)
-    model="qwen2.5-coder:7b",           # Ollama
-    endpoint="http://localhost:8080",     # llama-server
-    backend=MyBackend(),                  # Custom
+    # Backend (one of)
+    model="qwen2.5-coder:7b",           # → OllamaBackend
+    endpoint="http://localhost:8080",     # → LlamaServerBackend
+    backend=MyBackend(),                  # → custom
 
-    # Agent behavior
-    tools=[my_tool],                      # Tool functions
-    system_prompt="You are helpful.",      # Custom system prompt
-    template="chatml",                    # Chat template: chatml, llama3, mistral
-    max_tokens=4096,                      # Context budget
-    max_iterations=10,                    # Max tool call loops
-    max_retries=2,                        # Retries on broken output
-    temperature=0.7,                      # Sampling temperature
-    slot_id=0,                            # Pin to KV cache slot (llama-server)
-    log_level="WARNING",                  # DEBUG, INFO, WARNING, ERROR
+    # Behavior
+    tools=[my_tool],
+    system_prompt="You are helpful.",
+    template="chatml",          # chatml | llama3 | mistral
+    max_tokens=4096,            # context budget
+    max_iterations=10,          # max tool call loops
+    max_retries=2,              # retries on broken output
+    temperature=0.7,
+    slot_id=0,                  # KV cache slot (llama-server)
+    thinking=False,             # enable reasoning mode (Qwen3)
+    log_level="WARNING",        # DEBUG | INFO | WARNING | ERROR
 )
 ```
 
-## Cache Monitoring
+## Cache monitoring
 
 ```python
 agent = Agent(model="qwen3:1.7b", tools=[...])
 await agent.run("Do something with tools")
 
 print(agent.cache.summary())
-# {
-#   'total_requests': 3,
-#   'cache_hit_ratio': 0.72,
-#   'current_context_tokens': 245,
-#   'max_context_tokens': 4096,
-#   'last_prefill_ms': 15.0,
-# }
+# {'total_requests': 3, 'cache_hit_ratio': 0.72,
+#  'current_context_tokens': 245, 'max_context_tokens': 4096,
+#  'last_prefill_ms': 15.0}
 ```
+
+## Thinking mode
+
+Qwen3 and other reasoning models produce a thinking phase before responding. edgeloop handles this:
+
+```python
+agent = Agent(model="qwen3:1.7b", thinking=True, tools=[...])
+await agent.run("Complex problem")
+
+# Thinking text available for inspection
+print(agent._backend.last_thinking)
+```
+
+Thinking is off by default for agentic use — it consumes extra tokens (3-5x slower) without improving tool-calling accuracy. Enable it for reasoning-heavy tasks that don't need tools.
 
 ## Performance
 
-Tested on RTX 4070 (12GB VRAM):
+Tested on RTX 4070 (12GB):
 
-### Latency by model size
-
-| Model | Simple response | Tool roundtrip | Multi-step |
-|-------|----------------|---------------|------------|
+| Model | Simple | Tool roundtrip | Multi-step |
+|-------|--------|---------------|------------|
 | qwen3:0.6b (Ollama) | 80ms | 210ms | 290ms |
 | qwen3:1.7b (Ollama) | 93ms | 268ms | 437ms |
 | qwen2.5-coder:7b (Ollama) | 190ms | 470ms | 1.2s |
 | qwen2.5-1.5b (llama-server) | **34ms** | **143ms** | **197ms** |
 
-### Backend comparison (similar model sizes)
+llama-server is 2-12x faster than Ollama on the same hardware — no middleware overhead.
 
-| Metric | Ollama 1.7B | llama-server 1.5B | Speedup |
-|--------|-------------|-------------------|---------|
-| Simple response | 93ms | 34ms | 2.7x |
-| Tool roundtrip | 268ms | 143ms | 1.9x |
-| Cold start | 682ms | 55ms | 12x |
+### Scenario tests (12 scenarios, 4 backends)
 
-### Scenario test results (12 scenarios, 4 backends)
-
-| Backend | Pass Rate | Avg Latency |
+| Backend | Pass rate | Avg latency |
 |---------|-----------|-------------|
-| llama-server 1.5B | **12/12** | **0.305s** |
-| Ollama 7B | **12/12** | 1.181s |
+| llama-server 1.5B | 12/12 | 0.305s |
+| Ollama 7B | 12/12 | 1.181s |
 | Ollama 1.7B | 11/12 | 0.456s |
 | Ollama 0.6B | 11/12 | 0.326s |
 
-## Dependencies
-
-- `httpx` — async HTTP client
-- `click` — CLI
-
-That's it. No LangChain, no Pydantic, no YAML parsers, no async frameworks.
+Scenarios: calculator, chained math, file I/O, JSON extraction, text search, directory listing, error recovery, no-tool-needed, long output, shell commands, multi-tool selection, cross-tool context.
 
 ## Development
 
@@ -260,7 +221,19 @@ git clone https://github.com/parhamdb/edgeloop.git
 cd edgeloop
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
-pytest tests/ -v
+
+# Unit tests (no GPU needed)
+pytest tests/test_*.py -v
+
+# Real model tests (needs Ollama running)
+pytest tests/test_real_models.py tests/test_stress.py -v -s
+
+# Scenario tests (needs Ollama + optionally llama-server)
+python tests/test_scenarios.py
+
+# Benchmarks
+python tests/bench_performance.py
+python tests/bench_backends.py
 ```
 
 ## License

@@ -1,6 +1,11 @@
-"""Example: using a custom backend with edgeloop.
+"""Custom backend — implement the Backend protocol for any LLM.
 
-Shows how to implement the Backend protocol for any LLM server.
+The Backend protocol requires two methods:
+    complete()    → stream tokens
+    token_count() → count tokens in text
+
+Optionally:
+    last_cache_stats → CacheStats from last call
 """
 
 import asyncio
@@ -10,10 +15,7 @@ from edgeloop.cache import CacheStats
 
 
 class EchoBackend:
-    """A fake backend that echoes tool calls for testing.
-
-    Replace the complete() method with your own LLM server logic.
-    """
+    """Example backend that echoes input. Replace with your LLM."""
 
     def __init__(self):
         self._last_stats: CacheStats | None = None
@@ -30,16 +32,9 @@ class EchoBackend:
         max_tokens: int = 1024,
         messages: list[dict] | None = None,
     ) -> AsyncIterator[str]:
-        # A real backend would call your LLM here
-        # For demo, just echo back what the user asked
-        if messages:
-            last_msg = messages[-1]["content"] if messages else prompt
-        else:
-            last_msg = prompt[-200:]
-
-        response = f"I received your message. You said: {last_msg[:100]}"
-        yield response
-
+        # Your LLM call goes here
+        last_msg = messages[-1]["content"] if messages else prompt[-200:]
+        yield f"Echo: {last_msg[:100]}"
         self._last_stats = CacheStats(prompt_tokens=len(prompt) // 4)
 
     async def token_count(self, text: str) -> int:
@@ -48,17 +43,13 @@ class EchoBackend:
 
 @tool
 def greet(name: str) -> str:
-    """Greet someone by name."""
+    """Greet someone."""
     return f"Hello, {name}!"
 
 
 async def main():
-    agent = Agent(
-        backend=EchoBackend(),
-        tools=[greet],
-    )
-    response = await agent.run("Say hello to Alice")
-    print(response)
+    agent = Agent(backend=EchoBackend(), tools=[greet])
+    print(await agent.run("Say hello to Alice"))
 
 
 if __name__ == "__main__":
