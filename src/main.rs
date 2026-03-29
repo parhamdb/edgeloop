@@ -5,6 +5,7 @@ mod backend;
 mod repair;
 mod tool;
 mod transport;
+mod agent;
 
 use clap::Parser;
 
