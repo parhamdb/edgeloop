@@ -1,0 +1,25 @@
+# Home automation agent — listens on MQTT and WebSocket
+transports = ["mqtt", "websocket"]
+tool_packages = ["tools/filesystem", "tools/system"]
+
+[agent]
+system_prompt = "You are a home automation assistant. Control devices and report status."
+template = "chatml"
+max_tokens = 4096
+temperature = 0.3
+
+[backend]
+type = "ollama"
+endpoint = "http://localhost:11434"
+model = "qwen2.5-coder:7b"
+
+[transport.mqtt]
+broker = "mqtt://localhost:1883"
+topic_in = "home/agent/input"
+topic_out = "home/agent/output"
+client_id = "edgeloop-home"
+
+[transport.websocket]
+host = "0.0.0.0"
+port = 8888
+path = "/agent"

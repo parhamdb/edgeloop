@@ -1,0 +1,22 @@
+# Cloud backend — connects to OpenAI or any compatible API
+transports = ["cli", "websocket"]
+tool_packages = ["tools/filesystem", "tools/system"]
+
+[agent]
+system_prompt = "You are a helpful coding assistant."
+template = "chatml"
+max_tokens = 8192
+temperature = 0.7
+
+[backend]
+type = "openai"
+endpoint = "${OPENAI_BASE_URL:-https://api.openai.com/v1}"
+model = "${OPENAI_MODEL:-gpt-4o-mini}"
+api_key_env = "OPENAI_API_KEY"
+
+[transport.cli]
+prompt = "dev> "
+
+[transport.websocket]
+host = "127.0.0.1"
+port = 8888

@@ -1,70 +1,79 @@
 # edgeloop
 
-Rust binary — minimal agentic framework for local LLMs. Config-driven, tools as CLI commands, feature-gated backends and transports.
+Rust binary — minimal agentic framework for local LLMs. Config-driven, tools as CLI commands, feature-gated.
 
 ## Project structure
 
 ```
-src/                              # ~800 lines Rust
-├── main.rs                       # CLI (clap), config load, wire agent + transport
-├── config.rs                     # TOML structs, env var expansion ${VAR:-default}, includes, tool package loading
-├── agent.rs                      # ReAct loop, 3 chat templates (ChatML/Llama3/Mistral), truncation
-├── repair.rs                     # JSON extract/fix, Levenshtein fuzzy match, positional arg mapping, type coercion
-├── tool.rs                       # Subprocess executor — substitute {args} in command, spawn sh -c, timeout
-├── cache.rs                      # CacheStats + CacheManager — prefill tracking, truncation threshold
-├── message.rs                    # Message (role+content), OutputEvent (token/tool_call/done/error), IncomingRequest
+src/                                    # ~1,500 lines Rust
+├── main.rs                             # clap CLI, config load, wire agent + transports
+├── lib.rs                              # Public module exports for integration tests
+├── config.rs                           # TOML structs, ${VAR:-default} env expansion, includes, tool loading
+├── agent.rs                            # ReAct loop, 3 chat templates (ChatML/Llama3/Mistral), truncation
+├── repair.rs                           # JSON extract/fix, Levenshtein fuzzy match, positional arg mapping
+├── tool.rs                             # sh -c subprocess executor, {arg} substitution, timeout
+├── cache.rs                            # CacheStats + CacheManager — prefill tracking, truncation at 80%
+├── message.rs                          # Message, OutputEvent (tagged enum), IncomingRequest
 ├── backend/
-│   ├── mod.rs                    # Backend trait (stream_completion + token_count + last_cache_stats), MockBackend, factory
-│   ├── ollama.rs                 # Stub — Plan 2
-│   ├── llama_server.rs           # Stub — Plan 2
-│   └── openai.rs                 # Stub — Plan 2
+│   ├── mod.rs                          # Backend trait (stream_completion + token_count + last_cache_stats)
+│   ├── ollama.rs                       # /api/chat NDJSON streaming, thinking mode, KV cache stats
+│   ├── llama_server.rs                 # /completion SSE, cache_prompt + id_slot, /tokenize
+│   └── openai.rs                       # /v1/chat/completions SSE, works with any compatible API
 └── transport/
-    ├── mod.rs                    # Transport trait (serve + name), factory, TransportRequest/RequestHandler
-    ├── cli.rs                    # Interactive stdin/stdout REPL
-    ├── websocket.rs              # Stub — Plan 3
-    ├── mqtt.rs                   # Stub — Plan 3
-    └── socket.rs                 # Stub — Plan 3
+    ├── mod.rs                          # Transport trait (serve + name), factory
+    ├── cli.rs                          # stdin/stdout REPL
+    ├── websocket.rs                    # tokio-tungstenite, JSON frames
+    ├── mqtt.rs                         # rumqttc pub/sub, reconnection
+    └── socket.rs                       # Unix domain + TCP, newline-delimited JSON
 
-tools/                            # Example tool packages (TOML)
-├── filesystem/tools.toml         # read_file, write_file, list_dir
-└── system/tools.toml             # shell, find_files
+tests/
+├── integration_test.rs                 # Real Ollama: chat, tool call, file read, no-tool, perf
+└── benchmark.rs                        # Latency across 3 models, tool roundtrip, rapid fire
 
-edgeloop.toml                     # Example main config
-Cargo.toml                        # Features: ollama, llama-server, openai, cli-transport, websocket, mqtt, unix-socket, tcp-socket
+tools/                                  # Example tool packages
+├── filesystem/tools.toml               # read_file, write_file, list_dir
+└── system/tools.toml                   # shell, find_files
+
+examples/                               # Example configs
+├── home-automation.toml                # MQTT + WebSocket + Ollama
+├── minimal-openwrt.toml                # CLI + remote llama-server
+└── cloud-openai.toml                   # CLI + WebSocket + OpenAI API
 ```
-
-## Key patterns
-
-- **Tools are CLI commands.** Defined in TOML, executed via `sh -c`, args substituted with `{param}` templating.
-- **Feature flags gate backends and transports.** Core (agent, repair, config, tool) always compiled. `cargo build --no-default-features --features "llama-server,cli-transport"` for minimal binary.
-- **Backend trait** has 3 methods: `stream_completion()`, `token_count()`, `last_cache_stats()`. Uses `async_trait` + `BoxStream`.
-- **Transport trait** has `serve(handler)` — receives messages, dispatches to agent, streams OutputEvents back.
-- **Repair pipeline**: extract_json → repair_json → fuzzy_match_tool → coerce_arguments. Handles broken JSON, wrong tool names, wrong arg types.
-- **Chat templates**: ChatML (Qwen), Llama3, Mistral — selected via config `template` field.
-- **Config env vars**: `${VAR}` and `${VAR:-default}` expanded at load time.
 
 ## Building
 
 ```bash
-cargo build                    # debug
-cargo build --release          # release (2.6MB)
-cargo test                     # 34 tests
-cargo build --features full    # all features
+cargo build                             # debug, default features
+cargo build --release --features full   # all backends + transports (5.0MB)
+cargo build --release                   # default: ollama + llama-server + cli (4.4MB)
+cargo test --bin edgeloop               # 45 unit tests
+cargo test --test integration_test      # 5 integration tests (needs Ollama)
+cargo test --test benchmark -- --nocapture  # performance benchmarks
 ```
 
-## Tests
+## Feature flags
 
-```bash
-cargo test                           # all 34 tests
-cargo test config::tests             # config parsing (5 tests)
-cargo test repair::tests             # repair pipeline (16 tests)
-cargo test cache::tests              # cache manager (3 tests)
-cargo test tool::tests               # tool executor (6 tests)
-cargo test agent::tests              # agent loop with mock (4 tests)
-```
+default: ollama, llama-server, cli-transport
+Backends: ollama, llama-server, openai
+Transports: cli-transport, websocket, mqtt, unix-socket, tcp-socket
+
+## Key patterns
+
+- Tools are `sh -c` subprocesses. `{param}` substitution in command template from TOML.
+- Backend trait: `stream_completion()` returns `BoxStream<Result<String>>`, `token_count()`, `last_cache_stats()`.
+- Transport trait: `serve(handler)` — handler is `Arc<dyn Fn(TransportRequest)>`.
+- Non-CLI transports use JSON protocol: `{"message":"...","session":"..."}` → `{"type":"done","content":"...","session":"..."}`.
+- Repair pipeline: extract_json → repair_json → fuzzy_match_tool → coerce_arguments.
+- Agent loop: build prompt → stream backend → repair → tool or return. Append-only history.
+- All backends use `reqwest` with `rustls-tls` — no OpenSSL, clean static linking.
+
+## Performance (RTX 4070, Ollama)
+
+- qwen3:0.6b: 93ms simple, 858ms tool roundtrip
+- qwen2.5-coder:7b: 164ms simple, 694ms tool roundtrip
+- WebSocket end-to-end: 117ms
 
 ## Dependencies
 
-Runtime: tokio, reqwest (rustls), serde, serde_json, toml, clap, regex, tracing, async-trait, futures, anyhow.
-Optional: tokio-tungstenite (websocket), rumqttc (mqtt).
-All pure Rust — no C deps, clean static linking via musl.
+Runtime: tokio, reqwest (rustls), serde/serde_json, toml, clap, regex, tracing, async-trait, futures, anyhow
+Optional: tokio-tungstenite (websocket), rumqttc (mqtt)

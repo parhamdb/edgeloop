@@ -1,0 +1,17 @@
+# Minimal config for OpenWrt — connects to remote llama-server
+transports = ["cli"]
+
+[agent]
+system_prompt = "You are a network monitoring assistant."
+template = "chatml"
+max_tokens = 2048
+max_iterations = 5
+temperature = 0.3
+
+[backend]
+type = "llama-server"
+endpoint = "${LLAMA_SERVER:-http://192.168.1.100:8080}"
+slot_id = 0
+
+[transport.cli]
+prompt = "router> "

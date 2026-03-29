@@ -2,18 +2,23 @@
 
 Minimal agentic framework for local LLMs. Single static binary, config-driven, tools as CLI commands.
 
-Deploy a 2.6MB binary + a TOML config to any edge device. It talks to llama-server, Ollama, or any OpenAI-compatible API, executes tools as shell commands, and streams responses over CLI, WebSocket, MQTT, or Unix/TCP sockets.
+Deploy a 5MB binary + a TOML config to any edge device. Talks to Ollama, llama-server, or any OpenAI-compatible API. Executes tools as shell commands. Streams responses over CLI, WebSocket, MQTT, or Unix/TCP sockets.
 
 ## Quick Start
 
 ```bash
-cargo build --release
+cargo build --release --features full
 ./target/release/edgeloop --config edgeloop.toml
 ```
 
-## Config
+## How It Works
 
-Everything is in TOML. No code needed.
+1. You write a TOML config: which LLM backend, which tools (as shell commands), which I/O transports
+2. edgeloop starts, loads config, connects to the LLM, listens on configured transports
+3. Messages come in (CLI, WebSocket, MQTT, socket), the agent loop calls the LLM, executes tools, returns responses
+4. The repair pipeline fixes broken JSON from small models automatically
+
+## Config
 
 ```toml
 transports = ["cli"]
@@ -34,9 +39,11 @@ model = "qwen2.5-coder:7b"
 prompt = "you> "
 ```
 
-## Tools as CLI Commands
+See `examples/` for more configs: home automation (MQTT+WS), OpenWrt (minimal), cloud (OpenAI).
 
-Tools are shell commands declared in TOML. No SDK, no plugins.
+## Tools
+
+Tools are shell commands in TOML. No SDK, no plugins, no code.
 
 ```toml
 # tools/filesystem/tools.toml
@@ -56,143 +63,141 @@ timeout = 30
 command = { type = "string", required = true }
 ```
 
-The agent substitutes `{param}` in the command, spawns `sh -c`, captures stdout.
+Parameters are substituted into the command template. stdout is returned to the agent.
+
+## Backends
+
+| Backend | Config `type` | What it connects to |
+|---------|--------------|-------------------|
+| **Ollama** | `ollama` | Local/remote Ollama server |
+| **llama-server** | `llama-server` | llama.cpp HTTP server with KV cache slot pinning |
+| **OpenAI** | `openai` | OpenAI, Together, Groq, OpenRouter, vLLM, any compatible API |
+
+```toml
+# Remote Ollama
+[backend]
+type = "ollama"
+endpoint = "http://192.168.1.50:11434"
+model = "qwen2.5-coder:7b"
+
+# llama-server with slot pinning
+[backend]
+type = "llama-server"
+endpoint = "http://localhost:8080"
+slot_id = 0
+
+# OpenAI-compatible
+[backend]
+type = "openai"
+endpoint = "https://api.openai.com/v1"
+model = "gpt-4o-mini"
+api_key_env = "OPENAI_API_KEY"
+```
+
+## Transports
+
+| Transport | Config name | Protocol |
+|-----------|-----------|----------|
+| **CLI** | `cli` | Plain text stdin/stdout |
+| **WebSocket** | `websocket` | JSON frames |
+| **MQTT** | `mqtt` | JSON on pub/sub topics |
+| **Unix socket** | `unix` | Newline-delimited JSON |
+| **TCP socket** | `tcp` | Newline-delimited JSON |
+
+Multiple transports run simultaneously:
+```toml
+transports = ["cli", "websocket", "mqtt"]
+```
+
+JSON protocol (WebSocket/MQTT/sockets):
+```json
+→ {"message": "What is 2+2?", "session": "abc"}
+← {"type": "done", "content": "4", "session": "abc"}
+```
 
 ## Feature Flags
 
 Compile only what you need:
 
 ```bash
-# Full build (all backends + transports)
+# Default (ollama + llama-server + cli)
+cargo build --release
+
+# Full (all backends + transports) — 5.0MB
 cargo build --release --features full
 
-# Minimal for OpenWrt (~1.5MB)
+# Minimal for OpenWrt
 cargo build --release --no-default-features --features "llama-server,cli-transport"
 
 # Home automation
 cargo build --release --no-default-features --features "ollama,mqtt,websocket"
 ```
 
-| Feature | What it adds |
-|---------|-------------|
-| `ollama` | Ollama /api/chat backend |
-| `llama-server` | llama-server /completion backend |
-| `openai` | OpenAI-compatible API backend |
-| `cli-transport` | Interactive terminal REPL |
-| `websocket` | WebSocket server transport |
-| `mqtt` | MQTT pub/sub transport |
-| `unix-socket` | Unix domain socket transport |
-| `tcp-socket` | TCP socket transport |
+## Config Features
+
+- **Env var expansion**: `${VAR}` or `${VAR:-default}` in any string value
+- **Config includes**: `include = ["secrets.toml"]` — merge multiple TOML files
+- **Tool packages**: `tool_packages = ["tools/filesystem", "tools/custom"]` — modular tool sets
+
+## Performance
+
+Tested on RTX 4070 with Ollama:
+
+| Model | Simple response | Tool roundtrip |
+|-------|----------------|---------------|
+| qwen3:0.6b | 93ms (warm) | 858ms |
+| qwen3:1.7b | 160ms (warm) | 890ms |
+| qwen2.5-coder:7b | 164ms (warm) | 694ms |
+
+WebSocket roundtrip: 117ms end-to-end.
 
 ## Architecture
 
 ```
 src/
-├── main.rs              # CLI entry, config load, wire everything
-├── config.rs            # TOML parsing, env var expansion, includes
-├── agent.rs             # ReAct loop, chat templates, prompt building
-├── repair.rs            # JSON repair, fuzzy matching, type coercion
-├── tool.rs              # Subprocess executor, arg substitution
+├── main.rs              # CLI entry, config → agent → transports
+├── config.rs            # TOML parsing, env vars, includes, tool packages
+├── agent.rs             # ReAct loop, 3 chat templates, history truncation
+├── repair.rs            # JSON repair, fuzzy match, type coercion
+├── tool.rs              # Subprocess executor, arg substitution, timeout
 ├── cache.rs             # KV cache tracking, context budget
-├── message.rs           # Message, OutputEvent types
+├── message.rs           # Message + OutputEvent types
 ├── backend/
-│   ├── mod.rs           # Backend trait + factory
-│   ├── ollama.rs        # Ollama /api/chat (stub — Plan 2)
-│   ├── llama_server.rs  # llama-server /completion (stub — Plan 2)
-│   └── openai.rs        # OpenAI-compatible (stub — Plan 2)
+│   ├── mod.rs           # Backend trait
+│   ├── ollama.rs        # /api/chat NDJSON streaming
+│   ├── llama_server.rs  # /completion SSE streaming + slot pinning
+│   └── openai.rs        # /v1/chat/completions SSE streaming
 └── transport/
-    ├── mod.rs           # Transport trait + factory
-    ├── cli.rs           # Interactive stdin/stdout
-    ├── websocket.rs     # (stub — Plan 3)
-    ├── mqtt.rs          # (stub — Plan 3)
-    └── socket.rs        # (stub — Plan 3)
+    ├── mod.rs           # Transport trait
+    ├── cli.rs           # stdin/stdout REPL
+    ├── websocket.rs     # tokio-tungstenite
+    ├── mqtt.rs          # rumqttc
+    └── socket.rs        # Unix + TCP
 ```
-
-### Agent Loop
-
-```
-Message in (from transport)
-  → Build prompt (system + tool schemas + history)
-  → Apply chat template (ChatML/Llama3/Mistral)
-  → Stream from backend
-  → Repair pipeline (extract JSON → fix syntax → fuzzy match → coerce types)
-  → Tool call? → spawn subprocess → append result → loop
-  → Plain text? → return to transport
-```
-
-### Output Repair
-
-Small local models produce broken tool calls. The repair pipeline fixes them:
-
-1. **JSON extraction** — markdown fences, XML tags, raw brace matching
-2. **JSON repair** — single quotes, trailing commas, unmatched braces
-3. **Fuzzy tool match** — Levenshtein distance ≤ 2
-4. **Positional arg mapping** — wrong param names but right values
-5. **Type coercion** — `"42"` → `42` when schema says integer
-
-### KV Cache
-
-- System prompt built once (stable prefix for cache hits)
-- History append-only (maximizes prefix overlap)
-- Structured messages for Ollama (server-side cache reuse)
-- Slot pinning for llama-server
-- Auto-truncation at 80% context budget
-
-## Binary Size
-
-| Build | Size |
-|-------|------|
-| Default (ollama + llama-server + cli) | 2.6MB |
-| Minimal (llama-server + cli only) | ~1.5MB |
-| Full (all features) | ~5MB |
 
 ## Cross-Compilation
 
 ```bash
-# Install cross
 cargo install cross
 
 # ARM64 (Pi 4/5, Jetson)
-cross build --release --target aarch64-unknown-linux-musl
+cross build --release --target aarch64-unknown-linux-musl --features full
 
-# ARMv7 (Pi 3)
-cross build --release --target armv7-unknown-linux-musleabihf
-
-# MIPS (OpenWrt routers)
+# MIPS (OpenWrt)
 cross build --release --target mips-unknown-linux-musl --no-default-features --features "llama-server,cli-transport"
 ```
 
-All targets produce fully static musl binaries — no libc dependency.
+All targets: fully static musl binaries.
 
 ## Development
 
 ```bash
-cargo build           # debug build
-cargo test            # run all tests (34 tests)
-cargo build --release # optimized binary
+cargo build                          # debug build
+cargo test --bin edgeloop            # unit tests (45)
+cargo test --test integration_test   # integration tests (5, needs Ollama)
+cargo test --test benchmark -- --nocapture  # benchmarks (needs Ollama)
+cargo build --release --features full       # release binary
 ```
-
-## Status
-
-**Plan 1 (Core) — Complete:**
-- Config loading with env vars and includes
-- Repair pipeline (JSON fix, fuzzy match, coercion)
-- Cache manager with truncation
-- Tool executor (subprocess + timeout)
-- Agent loop with chat templates
-- CLI transport
-- Backend trait with mock for testing
-
-**Plan 2 (Backends) — Next:**
-- Ollama /api/chat with streaming
-- llama-server /completion with SSE
-- OpenAI-compatible API
-
-**Plan 3 (Transports) — After Plan 2:**
-- WebSocket, MQTT, Unix/TCP sockets
-
-**Plan 4 (Cross-compile + CI) — After Plan 3:**
-- Cross.toml, Makefile, feature flag matrix
 
 ## License
 
