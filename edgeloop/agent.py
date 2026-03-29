@@ -67,6 +67,7 @@ class Agent:
         max_retries: int = 2,
         temperature: float = 0.7,
         slot_id: int | None = None,
+        thinking: bool = False,
         log_level: str = "WARNING",
     ):
         if backend is not None:
@@ -75,6 +76,7 @@ class Agent:
             self._backend = OllamaBackend(
                 model=model,
                 endpoint=endpoint or "http://localhost:11434",
+                thinking=thinking,
             )
         elif endpoint is not None:
             self._backend = LlamaServerBackend(endpoint, slot_id=slot_id)
