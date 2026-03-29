@@ -3,7 +3,9 @@ use futures::stream::BoxStream;
 use futures::StreamExt;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
+use tokio::sync::mpsc;
+use tokio_stream::wrappers::ReceiverStream;
 
 use crate::backend::Backend;
 use crate::cache::CacheStats;
@@ -15,17 +17,17 @@ pub struct OllamaBackend {
     endpoint: String,
     model: String,
     thinking: bool,
-    last_cache_stats: Arc<Mutex<Option<CacheStats>>>,
+    last_cache_stats: Mutex<Option<CacheStats>>,
 }
 
 impl OllamaBackend {
     pub fn new(config: &BackendConfig) -> Self {
         Self {
             client: reqwest::Client::new(),
-            endpoint: config.endpoint.clone(),
+            endpoint: config.endpoint.trim_end_matches('/').to_string(),
             model: config.model.clone(),
             thinking: config.thinking,
-            last_cache_stats: Arc::new(Mutex::new(None)),
+            last_cache_stats: Mutex::new(None),
         }
     }
 }
@@ -33,9 +35,9 @@ impl OllamaBackend {
 // --- Request / Response types ---
 
 #[derive(Serialize)]
-struct OllamaChatRequest<'a> {
-    model: &'a str,
-    messages: &'a [OllamaMessage],
+struct OllamaChatRequest {
+    model: String,
+    messages: Vec<OllamaMessage>,
     stream: bool,
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     think: bool,
@@ -58,7 +60,6 @@ struct OllamaOptions {
 struct OllamaChatChunk {
     message: Option<OllamaChunkMessage>,
     done: bool,
-    // Present only on the final done chunk
     prompt_eval_count: Option<u64>,
     eval_count: Option<u64>,
     prompt_eval_duration: Option<u64>, // nanoseconds
@@ -68,29 +69,8 @@ struct OllamaChatChunk {
 #[derive(Deserialize, Debug)]
 struct OllamaChunkMessage {
     content: Option<String>,
-    // `thinking` field is present when think=true
     #[allow(dead_code)]
     thinking: Option<String>,
-}
-
-// Internal state for the unfold-based stream.
-enum StreamState {
-    // Haven't made the HTTP call yet.
-    Init {
-        client: reqwest::Client,
-        url: String,
-        body_json: Vec<u8>,
-        cache_stats_ref: Arc<Mutex<Option<CacheStats>>>,
-    },
-    // Streaming bytes from the response.
-    Running {
-        byte_stream: Box<dyn futures::Stream<Item = Result<bytes::Bytes, reqwest::Error>> + Unpin + Send>,
-        line_buf: String,
-        cache_stats_ref: Arc<Mutex<Option<CacheStats>>>,
-        // Tokens accumulated from the current byte chunk that haven't been yielded yet.
-        pending: Vec<String>,
-    },
-    Done,
 }
 
 // --- Backend impl ---
@@ -105,87 +85,141 @@ impl Backend for OllamaBackend {
         max_tokens: usize,
         _stop: &[String],
     ) -> BoxStream<'_, Result<String>> {
-        let url = format!("{}/api/chat", self.endpoint.trim_end_matches('/'));
-        let ollama_messages: Vec<OllamaMessage> = messages
-            .iter()
-            .map(|m| OllamaMessage {
-                role: m.role.clone(),
-                content: m.content.clone(),
-            })
-            .collect();
-
+        let url = format!("{}/api/chat", self.endpoint);
         let body = OllamaChatRequest {
-            model: &self.model,
-            messages: &ollama_messages,
+            model: self.model.clone(),
+            messages: messages
+                .iter()
+                .map(|m| OllamaMessage { role: m.role.clone(), content: m.content.clone() })
+                .collect(),
             stream: true,
             think: self.thinking,
-            options: OllamaOptions {
-                num_predict: max_tokens,
-                temperature,
-            },
+            options: OllamaOptions { num_predict: max_tokens, temperature },
         };
 
-        let body_json = match serde_json::to_vec(&body) {
-            Ok(b) => b,
-            Err(e) => {
-                return Box::pin(futures::stream::once(async move {
-                    Err(anyhow::anyhow!("Failed to serialize request: {}", e))
-                }));
-            }
-        };
-
-        let cache_stats_ref = Arc::clone(&self.last_cache_stats);
+        let (tx, rx) = mpsc::channel::<Result<String>>(64);
+        let (stats_tx, stats_rx) = mpsc::channel::<CacheStats>(1);
         let client = self.client.clone();
 
-        let initial_state = StreamState::Init {
-            client,
-            url,
-            body_json,
-            cache_stats_ref,
-        };
-
-        let stream = futures::stream::unfold(initial_state, |state| async move {
-            match state {
-                StreamState::Done => None,
-
-                StreamState::Init { client, url, body_json, cache_stats_ref } => {
-                    let response = client
-                        .post(&url)
-                        .header("Content-Type", "application/json")
-                        .body(body_json)
-                        .send()
+        tokio::spawn(async move {
+            let response = match client
+                .post(&url)
+                .header("Content-Type", "application/json")
+                .json(&body)
+                .send()
+                .await
+            {
+                Ok(r) => r,
+                Err(e) => {
+                    let _ = tx
+                        .send(Err(anyhow::anyhow!(
+                            "ConnectionError: could not connect to Ollama at {}: {}",
+                            url,
+                            e
+                        )))
                         .await;
-
-                    let response = match response {
-                        Ok(r) => r,
-                        Err(e) => {
-                            return Some((
-                                Err(anyhow::anyhow!("ConnectionError: could not connect to Ollama at {}: {}", url, e)),
-                                StreamState::Done,
-                            ));
-                        }
-                    };
-
-                    if !response.status().is_success() {
-                        let status = response.status();
-                        let body = response.text().await.unwrap_or_default();
-                        return Some((
-                            Err(anyhow::anyhow!("Ollama API error {}: {}", status, body)),
-                            StreamState::Done,
-                        ));
-                    }
-
-                    let byte_stream = Box::new(response.bytes_stream());
-                    process_running(byte_stream, String::new(), cache_stats_ref, Vec::new()).await
+                    return;
                 }
+            };
 
-                StreamState::Running { byte_stream, line_buf, cache_stats_ref, pending } => {
-                    process_running(byte_stream, line_buf, cache_stats_ref, pending).await
+            if !response.status().is_success() {
+                let status = response.status();
+                let body_text = response.text().await.unwrap_or_default();
+                let _ = tx
+                    .send(Err(anyhow::anyhow!("Ollama API error {}: {}", status, body_text)))
+                    .await;
+                return;
+            }
+
+            let mut byte_stream = response.bytes_stream();
+            let mut buf = String::new();
+
+            'outer: while let Some(chunk_result) = byte_stream.next().await {
+                let chunk = match chunk_result {
+                    Ok(c) => c,
+                    Err(e) => {
+                        let _ = tx.send(Err(anyhow::anyhow!("Stream error: {}", e))).await;
+                        return;
+                    }
+                };
+
+                let text = match std::str::from_utf8(&chunk) {
+                    Ok(t) => t.to_string(),
+                    Err(e) => {
+                        let _ = tx.send(Err(anyhow::anyhow!("UTF-8 decode error: {}", e))).await;
+                        return;
+                    }
+                };
+
+                buf.push_str(&text);
+
+                loop {
+                    if let Some(newline_pos) = buf.find('\n') {
+                        let line = buf[..newline_pos].trim_end_matches('\r').to_string();
+                        buf = buf[newline_pos + 1..].to_string();
+
+                        if line.is_empty() {
+                            continue;
+                        }
+
+                        let parsed: OllamaChatChunk = match serde_json::from_str(&line) {
+                            Ok(p) => p,
+                            Err(e) => {
+                                let _ = tx
+                                    .send(Err(anyhow::anyhow!(
+                                        "JSON parse error: {} (line: {})",
+                                        e,
+                                        line
+                                    )))
+                                    .await;
+                                return;
+                            }
+                        };
+
+                        if parsed.done {
+                            let stats = CacheStats {
+                                prompt_tokens: parsed.prompt_eval_count.unwrap_or(0) as usize,
+                                generated_tokens: parsed.eval_count.unwrap_or(0) as usize,
+                                prefill_ms: parsed.prompt_eval_duration.unwrap_or(0) as f64
+                                    / 1_000_000.0,
+                                generation_ms: parsed.eval_duration.unwrap_or(0) as f64
+                                    / 1_000_000.0,
+                                cache_hit_tokens: 0,
+                            };
+                            let _ = stats_tx.send(stats).await;
+                            break 'outer;
+                        }
+
+                        if let Some(msg) = &parsed.message {
+                            if let Some(content) = &msg.content {
+                                if !content.is_empty() {
+                                    if tx.send(Ok(content.clone())).await.is_err() {
+                                        return;
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        break;
+                    }
                 }
             }
+
+            let _ = stats_tx
+                .send(CacheStats {
+                    prompt_tokens: 0,
+                    generated_tokens: 0,
+                    prefill_ms: 0.0,
+                    generation_ms: 0.0,
+                    cache_hit_tokens: 0,
+                })
+                .await;
         });
 
-        Box::pin(stream)
+        let stats_ptr: *const Mutex<Option<CacheStats>> = &self.last_cache_stats;
+        let token_stream = ReceiverStream::new(rx);
+        let wrapped = OllamaTokenStream { inner: token_stream, stats_rx, stats_ptr, done: false };
+        Box::pin(wrapped)
     }
 
     async fn token_count(&self, text: &str) -> Result<usize> {
@@ -193,128 +227,46 @@ impl Backend for OllamaBackend {
     }
 
     fn last_cache_stats(&self) -> Option<CacheStats> {
-        self.last_cache_stats.lock().ok()?.clone()
+        self.last_cache_stats.lock().unwrap().clone()
     }
 }
 
-type ByteStream = Box<dyn futures::Stream<Item = Result<bytes::Bytes, reqwest::Error>> + Unpin + Send>;
+struct OllamaTokenStream {
+    inner: ReceiverStream<Result<String>>,
+    stats_rx: mpsc::Receiver<CacheStats>,
+    stats_ptr: *const Mutex<Option<CacheStats>>,
+    done: bool,
+}
 
-async fn process_running(
-    mut byte_stream: ByteStream,
-    mut line_buf: String,
-    cache_stats_ref: Arc<Mutex<Option<CacheStats>>>,
-    mut pending: Vec<String>,
-) -> Option<(Result<String>, StreamState)> {
-    // If there are buffered tokens from a previous chunk, yield one now.
-    if !pending.is_empty() {
-        let token = pending.remove(0);
-        let next = StreamState::Running { byte_stream, line_buf, cache_stats_ref, pending };
-        return Some((Ok(token), next));
-    }
+unsafe impl Send for OllamaTokenStream {}
+unsafe impl Sync for OllamaTokenStream {}
 
-    // Pull the next byte chunk from the HTTP stream.
-    loop {
-        let chunk = match byte_stream.next().await {
-            Some(Ok(c)) => c,
-            Some(Err(e)) => {
-                return Some((Err(anyhow::anyhow!("Stream error: {}", e)), StreamState::Done));
-            }
-            None => {
-                // HTTP stream ended without a done chunk — treat as finished.
-                return None;
-            }
-        };
+impl futures::Stream for OllamaTokenStream {
+    type Item = Result<String>;
 
-        let text = match std::str::from_utf8(&chunk) {
-            Ok(t) => t.to_owned(),
-            Err(e) => {
-                return Some((Err(anyhow::anyhow!("UTF-8 error: {}", e)), StreamState::Done));
-            }
-        };
+    fn poll_next(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        use std::task::Poll;
 
-        line_buf.push_str(&text);
+        if self.done {
+            return Poll::Ready(None);
+        }
 
-        // Parse all complete lines in the buffer.
-        let mut tokens_from_chunk: Vec<String> = Vec::new();
-        let mut done_seen = false;
-
-        while let Some(pos) = line_buf.find('\n') {
-            let line: String = line_buf.drain(..=pos).collect();
-            let line = line.trim().to_owned();
-            if line.is_empty() {
-                continue;
-            }
-
-            let parsed: OllamaChatChunk = match serde_json::from_str(&line) {
-                Ok(p) => p,
-                Err(e) => {
-                    return Some((
-                        Err(anyhow::anyhow!("JSON parse error: {} (line: {})", e, line)),
-                        StreamState::Done,
-                    ));
-                }
-            };
-
-            if parsed.done {
-                let stats = CacheStats {
-                    prompt_tokens: parsed.prompt_eval_count.unwrap_or(0) as usize,
-                    generated_tokens: parsed.eval_count.unwrap_or(0) as usize,
-                    prefill_ms: parsed.prompt_eval_duration.unwrap_or(0) as f64 / 1_000_000.0,
-                    generation_ms: parsed.eval_duration.unwrap_or(0) as f64 / 1_000_000.0,
-                    cache_hit_tokens: 0,
-                };
-                if let Ok(mut guard) = cache_stats_ref.lock() {
-                    *guard = Some(stats);
-                }
-                done_seen = true;
-                break;
-            }
-
-            // Yield content tokens; skip thinking tokens.
-            if let Some(msg) = &parsed.message {
-                if let Some(content) = &msg.content {
-                    if !content.is_empty() {
-                        tokens_from_chunk.push(content.clone());
+        match std::pin::Pin::new(&mut self.inner).poll_next(cx) {
+            Poll::Ready(Some(item)) => Poll::Ready(Some(item)),
+            Poll::Ready(None) => {
+                self.done = true;
+                if let Ok(stats) = self.stats_rx.try_recv() {
+                    unsafe {
+                        (*self.stats_ptr).lock().unwrap().replace(stats);
                     }
                 }
-                // msg.thinking is intentionally ignored.
+                Poll::Ready(None)
             }
+            Poll::Pending => Poll::Pending,
         }
-
-        if done_seen {
-            // Emit any tokens collected before the done marker, then terminate.
-            if tokens_from_chunk.is_empty() {
-                return None;
-            }
-            let first = tokens_from_chunk.remove(0);
-            // remaining tokens would be lost if we return Done — but done_seen means the
-            // stream is over, so any remaining pending tokens are already drained into tokens_from_chunk.
-            // Return Done after we've yielded them via pending.
-            let next = if tokens_from_chunk.is_empty() {
-                StreamState::Done
-            } else {
-                StreamState::Running {
-                    byte_stream,
-                    line_buf,
-                    cache_stats_ref,
-                    pending: tokens_from_chunk,
-                }
-            };
-            return Some((Ok(first), next));
-        }
-
-        if !tokens_from_chunk.is_empty() {
-            let first = tokens_from_chunk.remove(0);
-            let next = StreamState::Running {
-                byte_stream,
-                line_buf,
-                cache_stats_ref,
-                pending: tokens_from_chunk,
-            };
-            return Some((Ok(first), next));
-        }
-
-        // No tokens yet — loop and read another byte chunk.
     }
 }
 
@@ -345,10 +297,11 @@ mod tests {
     }
 
     #[test]
-    fn test_new_thinking_flag() {
-        let cfg = make_config("http://localhost:11434", "qwen3:0.6b", true);
+    fn test_new_thinking_flag_and_trailing_slash_stripped() {
+        let cfg = make_config("http://localhost:11434/", "qwen3:0.6b", true);
         let backend = OllamaBackend::new(&cfg);
         assert!(backend.thinking);
+        assert_eq!(backend.endpoint, "http://localhost:11434");
     }
 
     #[test]
@@ -362,8 +315,9 @@ mod tests {
     async fn test_token_count_heuristic() {
         let cfg = make_config("http://localhost:11434", "llama3", false);
         let backend = OllamaBackend::new(&cfg);
-        let count = backend.token_count("hello world 1234").await.unwrap();
-        assert_eq!(count, "hello world 1234".len() / 4);
+        let text = "hello world 1234";
+        let count = backend.token_count(text).await.unwrap();
+        assert_eq!(count, text.len() / 4);
     }
 
     #[test]
@@ -388,51 +342,38 @@ mod tests {
     }
 
     #[test]
-    fn test_done_chunk_duration_conversion() {
-        // nanoseconds → milliseconds: 5_000_000 ns = 5.0 ms
+    fn test_done_chunk_duration_ns_to_ms() {
         let ns: u64 = 5_000_000;
         let ms = ns as f64 / 1_000_000.0;
         assert!((ms - 5.0).abs() < f64::EPSILON);
     }
 
     #[test]
-    fn test_request_serialization() {
-        let messages = vec![OllamaMessage {
-            role: "user".into(),
-            content: "hi".into(),
-        }];
-        let req = OllamaChatRequest {
-            model: "llama3",
-            messages: &messages,
+    fn test_request_serialization_no_thinking() {
+        let body = OllamaChatRequest {
+            model: "llama3".into(),
+            messages: vec![OllamaMessage { role: "user".into(), content: "hi".into() }],
             stream: true,
             think: false,
-            options: OllamaOptions {
-                num_predict: 256,
-                temperature: 0.7,
-            },
+            options: OllamaOptions { num_predict: 256, temperature: 0.7 },
         };
-        let json = serde_json::to_value(&req).unwrap();
+        let json = serde_json::to_value(&body).unwrap();
         assert_eq!(json["model"], "llama3");
         assert_eq!(json["stream"], true);
         assert_eq!(json["options"]["num_predict"], 256);
-        // think=false should be skipped (skip_serializing_if)
         assert!(json.get("think").is_none());
     }
 
     #[test]
     fn test_request_serialization_with_thinking() {
-        let messages: Vec<OllamaMessage> = vec![];
-        let req = OllamaChatRequest {
-            model: "qwen3",
-            messages: &messages,
+        let body = OllamaChatRequest {
+            model: "qwen3".into(),
+            messages: vec![],
             stream: true,
             think: true,
-            options: OllamaOptions {
-                num_predict: 128,
-                temperature: 0.5,
-            },
+            options: OllamaOptions { num_predict: 128, temperature: 0.5 },
         };
-        let json = serde_json::to_value(&req).unwrap();
+        let json = serde_json::to_value(&body).unwrap();
         assert_eq!(json["think"], true);
     }
 
@@ -445,6 +386,8 @@ mod tests {
         assert_eq!(chunk.eval_count, Some(20));
         let prefill_ms = chunk.prompt_eval_duration.unwrap() as f64 / 1_000_000.0;
         assert!((prefill_ms - 3.0).abs() < f64::EPSILON);
+        let gen_ms = chunk.eval_duration.unwrap() as f64 / 1_000_000.0;
+        assert!((gen_ms - 8.0).abs() < f64::EPSILON);
     }
 
     #[test]
@@ -454,6 +397,7 @@ mod tests {
         assert!(!chunk.done);
         let msg = chunk.message.unwrap();
         assert_eq!(msg.content.unwrap(), "Hello");
+        assert!(msg.thinking.is_none());
     }
 
     #[test]
@@ -462,7 +406,6 @@ mod tests {
         let chunk: OllamaChatChunk = serde_json::from_str(raw).unwrap();
         assert!(!chunk.done);
         let msg = chunk.message.unwrap();
-        // content is empty — we would not yield it
         assert_eq!(msg.content.unwrap_or_default(), "");
         assert_eq!(msg.thinking.unwrap(), "let me think");
     }

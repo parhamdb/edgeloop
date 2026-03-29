@@ -63,7 +63,6 @@ impl Backend for LlamaServerBackend {
         max_tokens: usize,
         stop: &[String],
     ) -> BoxStream<'_, Result<String>> {
-        use futures::stream;
         use tokio_stream::wrappers::ReceiverStream;
 
         let url = format!("{}/completion", self.endpoint);
