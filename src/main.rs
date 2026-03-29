@@ -1,6 +1,7 @@
 mod cache;
 mod config;
 mod repair;
+mod tool;
 
 use clap::Parser;
 
