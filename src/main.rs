@@ -4,6 +4,7 @@ mod message;
 mod backend;
 mod repair;
 mod tool;
+mod transport;
 
 use clap::Parser;
 
