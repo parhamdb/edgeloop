@@ -1,3 +1,6 @@
+transports = ["cli"]
+tool_packages = ["tools/filesystem"]
+
 [agent]
 system_prompt = "You are a helpful assistant."
 template = "chatml"
@@ -11,9 +14,5 @@ type = "ollama"
 endpoint = "${OLLAMA_HOST:-http://localhost:11434}"
 model = "qwen2.5-coder:7b"
 
-transports = ["cli"]
-
 [transport.cli]
 prompt = "you> "
-
-tool_packages = ["tools/filesystem"]
