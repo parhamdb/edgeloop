@@ -1,88 +1,70 @@
 # edgeloop
 
-Minimal agentic framework for local LLMs — edge-first, KV cache optimized.
+Rust binary — minimal agentic framework for local LLMs. Config-driven, tools as CLI commands, feature-gated backends and transports.
 
 ## Project structure
 
 ```
-edgeloop/                     # Source (1,336 lines total)
-├── agent.py                  # Agent class, ReAct loop, chat templates (ChatML/Llama3/Mistral)
-├── tools.py                  # @tool decorator → JSON schema from type hints, async execution
-├── repair.py                 # JSON extraction/repair, fuzzy tool match, positional arg mapping
-├── cache.py                  # CacheManager + CacheStats — tracks prefill efficiency, advises truncation
-├── connection.py             # Shared HTTP connection pool for backends
-├── cli.py                    # Click CLI: `edgeloop chat`
-├── backend.py                # Re-exports from backends/
-├── __init__.py               # Public API
-└── backends/
-    ├── protocol.py           # Backend protocol: complete() + token_count() + last_cache_stats
-    ├── ollama.py             # Ollama /api/chat — structured messages for KV cache reuse
-    └── llama_server.py       # llama-server /completion — cache_prompt + slot pinning
+src/                              # ~800 lines Rust
+├── main.rs                       # CLI (clap), config load, wire agent + transport
+├── config.rs                     # TOML structs, env var expansion ${VAR:-default}, includes, tool package loading
+├── agent.rs                      # ReAct loop, 3 chat templates (ChatML/Llama3/Mistral), truncation
+├── repair.rs                     # JSON extract/fix, Levenshtein fuzzy match, positional arg mapping, type coercion
+├── tool.rs                       # Subprocess executor — substitute {args} in command, spawn sh -c, timeout
+├── cache.rs                      # CacheStats + CacheManager — prefill tracking, truncation threshold
+├── message.rs                    # Message (role+content), OutputEvent (token/tool_call/done/error), IncomingRequest
+├── backend/
+│   ├── mod.rs                    # Backend trait (stream_completion + token_count + last_cache_stats), MockBackend, factory
+│   ├── ollama.rs                 # Stub — Plan 2
+│   ├── llama_server.rs           # Stub — Plan 2
+│   └── openai.rs                 # Stub — Plan 2
+└── transport/
+    ├── mod.rs                    # Transport trait (serve + name), factory, TransportRequest/RequestHandler
+    ├── cli.rs                    # Interactive stdin/stdout REPL
+    ├── websocket.rs              # Stub — Plan 3
+    ├── mqtt.rs                   # Stub — Plan 3
+    └── socket.rs                 # Stub — Plan 3
 
-tests/                        # 50 unit tests + real model tests
-├── test_tools.py             # @tool schema generation, execution, timeout
-├── test_repair.py            # JSON repair, fuzzy match, coercion (22 tests)
-├── test_backend.py           # LlamaServerBackend mock tests
-├── test_agent.py             # Agent loop with mock backend
-├── test_cli.py               # CLI help, tool loading
-├── test_real_models.py       # Real GPU tests: basic chat, tool calling, cache
-├── test_stress.py            # Multi-step chains, file I/O, rapid fire
-├── test_scenarios.py         # 12 real-world scenarios across 4 backends
-├── bench_performance.py      # TTFT, throughput, cache efficiency
-└── bench_backends.py         # Ollama vs llama-server comparison
+tools/                            # Example tool packages (TOML)
+├── filesystem/tools.toml         # read_file, write_file, list_dir
+└── system/tools.toml             # shell, find_files
 
-examples/
-├── hello.py                  # Quick start with Ollama or llama-server
-└── custom_backend.py         # How to implement Backend protocol
+edgeloop.toml                     # Example main config
+Cargo.toml                        # Features: ollama, llama-server, openai, cli-transport, websocket, mqtt, unix-socket, tcp-socket
+```
+
+## Key patterns
+
+- **Tools are CLI commands.** Defined in TOML, executed via `sh -c`, args substituted with `{param}` templating.
+- **Feature flags gate backends and transports.** Core (agent, repair, config, tool) always compiled. `cargo build --no-default-features --features "llama-server,cli-transport"` for minimal binary.
+- **Backend trait** has 3 methods: `stream_completion()`, `token_count()`, `last_cache_stats()`. Uses `async_trait` + `BoxStream`.
+- **Transport trait** has `serve(handler)` — receives messages, dispatches to agent, streams OutputEvents back.
+- **Repair pipeline**: extract_json → repair_json → fuzzy_match_tool → coerce_arguments. Handles broken JSON, wrong tool names, wrong arg types.
+- **Chat templates**: ChatML (Qwen), Llama3, Mistral — selected via config `template` field.
+- **Config env vars**: `${VAR}` and `${VAR:-default}` expanded at load time.
+
+## Building
+
+```bash
+cargo build                    # debug
+cargo build --release          # release (2.6MB)
+cargo test                     # 34 tests
+cargo build --features full    # all features
+```
+
+## Tests
+
+```bash
+cargo test                           # all 34 tests
+cargo test config::tests             # config parsing (5 tests)
+cargo test repair::tests             # repair pipeline (16 tests)
+cargo test cache::tests              # cache manager (3 tests)
+cargo test tool::tests               # tool executor (6 tests)
+cargo test agent::tests              # agent loop with mock (4 tests)
 ```
 
 ## Dependencies
 
-Runtime: `httpx`, `click`. Dev: `pytest`, `pytest-asyncio`. Nothing else.
-
-## Architecture decisions
-
-- **Single async process.** No multiprocessing, no thread pools beyond tool execution.
-- **Backend protocol uses `typing.Protocol`** — no inheritance needed. Any object with `complete()` and `token_count()` satisfies it.
-- **Ollama uses `/api/chat` not `/api/generate`** — structured messages enable KV cache reuse across turns (14x prefill speedup measured).
-- **System prompt built once at `Agent.__init__`** — deterministic, never changes. Maximizes prefix cache hits.
-- **Compact tool schema format** — `name(param:type)` instead of full JSON schema. ~40% fewer tokens.
-- **Thinking mode disabled by default** — Qwen3 thinking consumes 50-200 tokens before responding, doesn't improve tool-calling accuracy, and is 3-5x slower. Opt-in via `thinking=True`.
-
-## Key patterns
-
-- Tool calls use `{"tool": "name", "arguments": {"param": "value"}}` JSON format
-- Repair pipeline: extract JSON → fix syntax → fuzzy match tool name → coerce types → positional arg fallback
-- Agent loop: build prompt → call backend → parse/repair → tool call or return → append to history (never rewrite)
-- Each backend reports `CacheStats` after completion; agent's `CacheManager` tracks lifetime metrics
-
-## Running tests
-
-```bash
-source .venv/bin/activate
-
-# Unit tests (fast, no GPU)
-pytest tests/test_tools.py tests/test_repair.py tests/test_backend.py tests/test_agent.py tests/test_cli.py -v
-
-# Real model tests (needs Ollama with qwen3:0.6b, qwen3:1.7b, qwen2.5-coder:7b)
-pytest tests/test_real_models.py tests/test_stress.py -v -s
-
-# Full scenario matrix (needs Ollama + optionally llama-server on :8082)
-python tests/test_scenarios.py
-```
-
-## Models tested
-
-- qwen3:0.6b — works for single tool calls, fails multi-step chains
-- qwen3:1.7b — reliable for most scenarios
-- qwen2.5-coder:7b — reliable, best Ollama option
-- qwen2.5:14b — reliable, slower
-- qwen2.5-0.5b via llama-server — fastest backend, reliable
-- qwen2.5-1.5b via llama-server — fastest + reliable
-
-## Performance reference (RTX 4070)
-
-- Ollama 0.6b: 80ms simple, 210ms tool roundtrip
-- Ollama 7b: 190ms simple, 470ms tool roundtrip
-- llama-server 1.5b: 34ms simple, 143ms tool roundtrip
-- llama-server is 2-12x faster than Ollama (no Go middleware overhead)
+Runtime: tokio, reqwest (rustls), serde, serde_json, toml, clap, regex, tracing, async-trait, futures, anyhow.
+Optional: tokio-tungstenite (websocket), rumqttc (mqtt).
+All pure Rust — no C deps, clean static linking via musl.
