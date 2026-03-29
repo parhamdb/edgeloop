@@ -1,0 +1,22 @@
+[[tools]]
+name = "read_file"
+description = "Read a file from disk"
+command = "cat {path}"
+[tools.parameters]
+path = { type = "string", required = true }
+
+[[tools]]
+name = "write_file"
+description = "Write content to a file"
+command = "tee {path}"
+stdin = "{content}"
+[tools.parameters]
+path = { type = "string", required = true }
+content = { type = "string", required = true }
+
+[[tools]]
+name = "list_dir"
+description = "List files in a directory"
+command = "ls -1 {path}"
+[tools.parameters]
+path = { type = "string", default = "." }

@@ -1,0 +1,19 @@
+[agent]
+system_prompt = "You are a helpful assistant."
+template = "chatml"
+max_tokens = 4096
+max_iterations = 10
+max_retries = 2
+temperature = 0.7
+
+[backend]
+type = "ollama"
+endpoint = "${OLLAMA_HOST:-http://localhost:11434}"
+model = "qwen2.5-coder:7b"
+
+transports = ["cli"]
+
+[transport.cli]
+prompt = "you> "
+
+tool_packages = ["tools/filesystem"]

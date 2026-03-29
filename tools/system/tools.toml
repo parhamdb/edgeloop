@@ -1,0 +1,16 @@
+[[tools]]
+name = "shell"
+description = "Run a shell command and return output"
+command = "sh -c '{command}'"
+timeout = 30
+[tools.parameters]
+command = { type = "string", required = true }
+
+[[tools]]
+name = "find_files"
+description = "Find files matching a pattern"
+command = "find {path} -name '{pattern}'"
+timeout = 15
+[tools.parameters]
+pattern = { type = "string", required = true }
+path = { type = "string", default = "." }
