@@ -1,5 +1,7 @@
 mod cache;
 mod config;
+mod message;
+mod backend;
 mod repair;
 mod tool;
 
