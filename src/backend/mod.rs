@@ -11,6 +11,8 @@ pub mod ollama;
 pub mod llama_server;
 #[cfg(feature = "openai")]
 pub mod openai;
+#[cfg(feature = "vllm")]
+pub mod vllm;
 
 #[async_trait]
 pub trait Backend: Send + Sync {
@@ -27,7 +29,8 @@ pub trait Backend: Send + Sync {
     fn last_cache_stats(&self) -> Option<CacheStats>;
 }
 
-pub fn create_backend(config: &crate::config::BackendConfig) -> Result<Box<dyn Backend>> {
+#[allow(unused_variables)]
+pub fn create_backend(config: &crate::config::BackendConfig, tools: &[crate::config::ToolDef]) -> Result<Box<dyn Backend>> {
     match config.backend_type.as_str() {
         #[cfg(feature = "ollama")]
         "ollama" => Ok(Box::new(ollama::OllamaBackend::new(config))),
@@ -35,6 +38,8 @@ pub fn create_backend(config: &crate::config::BackendConfig) -> Result<Box<dyn B
         "llama-server" => Ok(Box::new(llama_server::LlamaServerBackend::new(config))),
         #[cfg(feature = "openai")]
         "openai" => Ok(Box::new(openai::OpenAIBackend::new(config)?)),
+        #[cfg(feature = "vllm")]
+        "vllm" => Ok(Box::new(vllm::VllmBackend::new(config, tools))),
         other => anyhow::bail!("Unknown or disabled backend: '{}'", other),
     }
 }

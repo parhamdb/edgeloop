@@ -46,7 +46,7 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!("Loaded {} tools", tools.len());
 
     // Create backend
-    let backend: Arc<dyn backend::Backend> = Arc::from(backend::create_backend(&cfg.backend)?);
+    let backend: Arc<dyn backend::Backend> = Arc::from(backend::create_backend(&cfg.backend, &tools)?);
 
     // Create agent
     let agent = Arc::new(agent::Agent::new(
