@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 pub mod agent;
 pub mod backend;
 pub mod cache;

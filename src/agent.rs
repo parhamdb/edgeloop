@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use futures::StreamExt;
@@ -173,6 +172,7 @@ fn build_system_prompt(base: &str, tools: &[ToolDef]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
     use crate::backend::mock::MockBackend;
     use crate::config::ParamDef;
 

@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 mod agent;
 mod backend;
 mod cache;
@@ -60,10 +62,7 @@ async fn main() -> anyhow::Result<()> {
         anyhow::bail!("No transports configured. Add at least one to 'transports' in config.");
     }
 
-    // Run first transport (Plan 3 will run multiple concurrently)
-    let t = &transports[0];
-    tracing::info!("Starting transport: {}", t.name());
-
+    // Build handler
     let agent_clone = agent.clone();
     let handler: transport::RequestHandler = Arc::new(move |req: transport::TransportRequest| {
         let agent = agent_clone.clone();
@@ -76,7 +75,25 @@ async fn main() -> anyhow::Result<()> {
         });
     });
 
-    t.serve(handler).await?;
+    // Run all transports concurrently
+    if transports.len() == 1 {
+        tracing::info!("Starting transport: {}", transports[0].name());
+        transports[0].serve(handler).await?;
+    } else {
+        let mut handles = Vec::new();
+        for t in transports {
+            let h = handler.clone();
+            tracing::info!("Starting transport: {}", t.name());
+            handles.push(tokio::spawn(async move {
+                if let Err(e) = t.serve(h).await {
+                    tracing::error!("Transport {} failed: {}", t.name(), e);
+                }
+            }));
+        }
+        // Wait for any transport to finish (CLI exits on quit, servers run forever)
+        let (result, _, _) = futures::future::select_all(handles).await;
+        result?;
+    }
 
     Ok(())
 }

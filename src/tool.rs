@@ -75,7 +75,7 @@ pub async fn execute_tool(tool: &ToolDef, args: &HashMap<String, Value>) -> Stri
 pub fn format_tool_schema(tool: &ToolDef) -> String {
     let mut args = Vec::new();
     let mut params: Vec<_> = tool.parameters.iter().collect();
-    params.sort_by_key(|(k, _)| k.clone());
+    params.sort_by_key(|(k, _)| (*k).clone());
     for (name, param) in params {
         let mut arg = format!("{}:{}", name, param.param_type);
         if !param.required {
