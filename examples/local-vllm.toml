@@ -1,0 +1,33 @@
+# vLLM backend — local GPU inference with guided decoding
+#
+# Start vLLM:
+#   python -m vllm.entrypoints.openai.api_server \
+#     --model Qwen/Qwen2.5-Coder-7B \
+#     --enable-prefix-caching \
+#     --enable-prompt-tokens-details \
+#     --dtype auto
+#
+# Run edgeloop:
+#   cargo run --features vllm -- --config examples/local-vllm.toml
+
+transports = ["cli"]
+tool_packages = ["tools/filesystem"]
+
+[agent]
+system_prompt = "You are a helpful assistant. Use tools when needed."
+template = "chatml"
+max_tokens = 4096
+temperature = 0.1
+
+[backend]
+type = "vllm"
+endpoint = "http://localhost:8000"
+model = "Qwen/Qwen2.5-Coder-7B"
+seed = 42
+guided_mode = "json"
+min_tokens = 5
+repetition_penalty = 1.05
+
+[cache]
+max_context = 4096
+truncation_threshold = 0.8
