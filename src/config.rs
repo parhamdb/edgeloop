@@ -43,11 +43,33 @@ pub struct BackendConfig {
     #[serde(default)]
     pub model: String,
     #[serde(default)]
+    pub api_key_env: Option<String>,
+
+    // --- Provider-specific KV cache tuning ---
+
+    /// llama-server: Pin to a specific KV cache slot (0-based).
+    /// Each slot has its own KV cache. Pinning ensures your agent's
+    /// conversation stays in the same cache across requests.
+    #[serde(default)]
     pub slot_id: Option<usize>,
+
+    /// llama-server: Number of initial prompt tokens to keep permanently
+    /// in the cache. Set to your system prompt token count so it never
+    /// gets evicted. (0 = don't pin, -1 = keep all)
+    #[serde(default)]
+    pub n_keep: Option<i32>,
+
+    /// Ollama: How long to keep the model loaded in memory.
+    /// "5m" = 5 minutes, "30m" = 30 minutes, "-1" = forever.
+    /// Default: Ollama's own default (typically 5m).
+    #[serde(default)]
+    pub keep_alive: Option<String>,
+
+    /// Ollama/Qwen3: Enable thinking/reasoning mode.
+    /// Generates internal reasoning before the response.
+    /// Off by default — wastes tokens for tool-calling agents.
     #[serde(default)]
     pub thinking: bool,
-    #[serde(default)]
-    pub api_key_env: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Clone, Default)]

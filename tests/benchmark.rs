@@ -11,7 +11,7 @@ mod bench {
             backend_type: "ollama".into(),
             endpoint: "http://localhost:11434".into(),
             model: model.into(),
-            slot_id: None, thinking: false, api_key_env: None,
+            slot_id: None, n_keep: None, keep_alive: None, thinking: false, api_key_env: None,
         };
         let agent_cfg = edgeloop::config::AgentConfig {
             system_prompt: "You are helpful.".into(),

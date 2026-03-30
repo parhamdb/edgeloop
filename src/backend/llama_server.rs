@@ -13,6 +13,7 @@ pub struct LlamaServerBackend {
     client: reqwest::Client,
     endpoint: String,
     slot_id: Option<usize>,
+    n_keep: Option<i32>,
     last_stats: Arc<Mutex<Option<CacheStats>>>,
 }
 
@@ -22,6 +23,7 @@ impl LlamaServerBackend {
             client: reqwest::Client::new(),
             endpoint: config.endpoint.trim_end_matches('/').to_owned(),
             slot_id: config.slot_id,
+            n_keep: config.n_keep,
             last_stats: Arc::new(Mutex::new(None)),
         }
     }
@@ -76,6 +78,9 @@ impl Backend for LlamaServerBackend {
         });
         if let Some(slot_id) = self.slot_id {
             body["id_slot"] = serde_json::json!(slot_id);
+        }
+        if let Some(n_keep) = self.n_keep {
+            body["n_keep"] = serde_json::json!(n_keep);
         }
 
         let client = self.client.clone();
@@ -212,6 +217,8 @@ mod tests {
             endpoint: endpoint.into(),
             model: String::new(),
             slot_id,
+            n_keep: None,
+            keep_alive: None,
             thinking: false,
             api_key_env: None,
         }

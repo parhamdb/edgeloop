@@ -17,6 +17,7 @@ pub struct OllamaBackend {
     endpoint: String,
     model: String,
     thinking: bool,
+    keep_alive: Option<String>,
     last_stats: Mutex<Option<CacheStats>>,
 }
 
@@ -27,6 +28,7 @@ impl OllamaBackend {
             endpoint: config.endpoint.trim_end_matches('/').to_string(),
             model: config.model.clone(),
             thinking: config.thinking,
+            keep_alive: config.keep_alive.clone(),
             last_stats: Mutex::new(None),
         }
     }
@@ -39,6 +41,10 @@ struct ChatRequest {
     stream: bool,
     think: bool,
     options: ChatOptions,
+    /// How long to keep model loaded. Number (seconds) or string ("30m").
+    /// -1 = forever. Omitted = Ollama default.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    keep_alive: Option<serde_json::Value>,
 }
 
 #[derive(Serialize)]
@@ -90,6 +96,15 @@ impl Backend for OllamaBackend {
             stream: true,
             think: self.thinking,
             options: ChatOptions { num_predict: max_tokens, temperature },
+            keep_alive: self.keep_alive.as_ref().map(|v| {
+                // Try to parse as integer first (e.g., "-1", "0", "300")
+                if let Ok(n) = v.parse::<i64>() {
+                    serde_json::Value::Number(n.into())
+                } else {
+                    // Otherwise send as string (e.g., "30m", "1h")
+                    serde_json::Value::String(v.clone())
+                }
+            }),
         };
 
         let client = self.client.clone();
@@ -197,6 +212,8 @@ mod tests {
             endpoint: "http://localhost:11434".into(),
             model: "qwen3:0.6b".into(),
             slot_id: None,
+            n_keep: None,
+            keep_alive: None,
             thinking: false,
             api_key_env: None,
         };

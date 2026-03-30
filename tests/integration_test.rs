@@ -28,6 +28,8 @@ mod ollama_integration {
             endpoint: "http://localhost:11434".into(),
             model: "qwen2.5-coder:7b".into(),
             slot_id: None,
+            n_keep: None,
+            keep_alive: None,
             thinking: false,
             api_key_env: None,
         };
