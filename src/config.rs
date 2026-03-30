@@ -70,6 +70,28 @@ pub struct BackendConfig {
     /// Off by default — wastes tokens for tool-calling agents.
     #[serde(default)]
     pub thinking: bool,
+
+    /// llama-server: GBNF grammar string to constrain output format.
+    /// Forces valid JSON for tool calls — eliminates malformed output.
+    /// Example: 'root ::= "{" ... "}"'
+    #[serde(default)]
+    pub grammar: Option<String>,
+
+    /// llama-server: Fixed random seed for deterministic output.
+    /// Same prompt + seed = same response. Useful for testing
+    /// and cache-friendly workloads.
+    #[serde(default)]
+    pub seed: Option<i64>,
+
+    /// Ollama: Number of context tokens. Lower = less RAM.
+    /// Override Ollama's default (usually model's max context).
+    #[serde(default)]
+    pub num_ctx: Option<usize>,
+
+    /// llama-server: Minimum tokens to reuse from KV cache.
+    /// Enables KV shifting — reuses cache even when prompt changes slightly.
+    #[serde(default)]
+    pub cache_reuse: Option<usize>,
 }
 
 #[derive(Debug, Deserialize, Clone, Default)]

@@ -18,6 +18,8 @@ pub struct OllamaBackend {
     model: String,
     thinking: bool,
     keep_alive: Option<String>,
+    num_ctx: Option<usize>,
+    seed: Option<i64>,
     last_stats: Mutex<Option<CacheStats>>,
 }
 
@@ -29,6 +31,8 @@ impl OllamaBackend {
             model: config.model.clone(),
             thinking: config.thinking,
             keep_alive: config.keep_alive.clone(),
+            num_ctx: config.num_ctx,
+            seed: config.seed,
             last_stats: Mutex::new(None),
         }
     }
@@ -57,6 +61,10 @@ struct ChatMsg {
 struct ChatOptions {
     num_predict: usize,
     temperature: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    num_ctx: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    seed: Option<i64>,
 }
 
 #[derive(Deserialize)]
@@ -95,7 +103,7 @@ impl Backend for OllamaBackend {
             }).collect(),
             stream: true,
             think: self.thinking,
-            options: ChatOptions { num_predict: max_tokens, temperature },
+            options: ChatOptions { num_predict: max_tokens, temperature, num_ctx: self.num_ctx, seed: self.seed },
             keep_alive: self.keep_alive.as_ref().map(|v| {
                 // Try to parse as integer first (e.g., "-1", "0", "300")
                 if let Ok(n) = v.parse::<i64>() {
@@ -214,7 +222,7 @@ mod tests {
             slot_id: None,
             n_keep: None,
             keep_alive: None,
-            thinking: false,
+            thinking: false, grammar: None, seed: None, num_ctx: None, cache_reuse: None,
             api_key_env: None,
         };
         let backend = OllamaBackend::new(&config);

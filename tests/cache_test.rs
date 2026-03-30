@@ -11,7 +11,7 @@ mod cache_tests {
             backend_type: "ollama".into(),
             endpoint: "http://localhost:11434".into(),
             model: "qwen2.5-coder:7b".into(),
-            slot_id: None, n_keep: None, keep_alive: None, thinking: false, api_key_env: None,
+            slot_id: None, n_keep: None, keep_alive: None, thinking: false, grammar: None, seed: None, num_ctx: None, cache_reuse: None, api_key_env: None,
         };
         let agent_cfg = edgeloop::config::AgentConfig {
             system_prompt: "You are helpful. Be very concise. One sentence max.".into(),

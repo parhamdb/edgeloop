@@ -14,6 +14,9 @@ pub struct LlamaServerBackend {
     endpoint: String,
     slot_id: Option<usize>,
     n_keep: Option<i32>,
+    grammar: Option<String>,
+    seed: Option<i64>,
+    cache_reuse: Option<usize>,
     last_stats: Arc<Mutex<Option<CacheStats>>>,
 }
 
@@ -24,6 +27,9 @@ impl LlamaServerBackend {
             endpoint: config.endpoint.trim_end_matches('/').to_owned(),
             slot_id: config.slot_id,
             n_keep: config.n_keep,
+            grammar: config.grammar.clone(),
+            seed: config.seed,
+            cache_reuse: config.cache_reuse,
             last_stats: Arc::new(Mutex::new(None)),
         }
     }
@@ -81,6 +87,15 @@ impl Backend for LlamaServerBackend {
         }
         if let Some(n_keep) = self.n_keep {
             body["n_keep"] = serde_json::json!(n_keep);
+        }
+        if let Some(ref grammar) = self.grammar {
+            body["grammar"] = serde_json::json!(grammar);
+        }
+        if let Some(seed) = self.seed {
+            body["seed"] = serde_json::json!(seed);
+        }
+        if let Some(cache_reuse) = self.cache_reuse {
+            body["n_cache_reuse"] = serde_json::json!(cache_reuse);
         }
 
         let client = self.client.clone();
@@ -219,7 +234,7 @@ mod tests {
             slot_id,
             n_keep: None,
             keep_alive: None,
-            thinking: false,
+            thinking: false, grammar: None, seed: None, num_ctx: None, cache_reuse: None,
             api_key_env: None,
         }
     }

@@ -31,7 +31,7 @@ mod ollama_integration {
             n_keep: None,
             keep_alive: None,
             thinking: false,
-            api_key_env: None,
+            grammar: None, seed: None, num_ctx: None, cache_reuse: None, api_key_env: None,
         };
         (agent, cache, backend_cfg)
     }
