@@ -224,6 +224,8 @@ mod tests {
             keep_alive: None,
             thinking: false, grammar: None, seed: None, num_ctx: None, cache_reuse: None,
             api_key_env: None,
+            min_tokens: None, repetition_penalty: None, top_k: None, min_p: None,
+            stop_token_ids: None, truncate_prompt_tokens: None, guided_mode: None, guided_pattern: None,
         };
         let backend = OllamaBackend::new(&config);
         assert_eq!(backend.model, "qwen3:0.6b");

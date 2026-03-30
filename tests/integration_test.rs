@@ -32,6 +32,8 @@ mod ollama_integration {
             keep_alive: None,
             thinking: false,
             grammar: None, seed: None, num_ctx: None, cache_reuse: None, api_key_env: None,
+            min_tokens: None, repetition_penalty: None, top_k: None, min_p: None,
+            stop_token_ids: None, truncate_prompt_tokens: None, guided_mode: None, guided_pattern: None,
         };
         (agent, cache, backend_cfg)
     }

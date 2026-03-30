@@ -92,6 +92,41 @@ pub struct BackendConfig {
     /// Enables KV shifting — reuses cache even when prompt changes slightly.
     #[serde(default)]
     pub cache_reuse: Option<usize>,
+
+    /// vLLM: Minimum tokens to generate before allowing stop.
+    /// Prevents premature stops on short tool calls.
+    #[serde(default)]
+    pub min_tokens: Option<usize>,
+
+    /// vLLM: Repetition penalty (>1.0 discourages repeats).
+    #[serde(default)]
+    pub repetition_penalty: Option<f64>,
+
+    /// vLLM: Top-k sampling (-1 = all tokens).
+    #[serde(default)]
+    pub top_k: Option<i32>,
+
+    /// vLLM: Minimum probability threshold (alternative to top_p).
+    #[serde(default)]
+    pub min_p: Option<f64>,
+
+    /// vLLM: Stop generation on specific token IDs (not just strings).
+    #[serde(default)]
+    pub stop_token_ids: Option<Vec<u32>>,
+
+    /// vLLM: Server-side prompt truncation to N tokens.
+    #[serde(default)]
+    pub truncate_prompt_tokens: Option<usize>,
+
+    /// vLLM: Guided decoding mode — "json", "regex", "grammar", "choice", or "none".
+    /// When "json", auto-generates JSON schema from tool definitions.
+    #[serde(default)]
+    pub guided_mode: Option<String>,
+
+    /// vLLM: Explicit guided decoding pattern (regex string, grammar, or choice list).
+    /// Overrides auto-generated schema when set.
+    #[serde(default)]
+    pub guided_pattern: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Clone, Default)]

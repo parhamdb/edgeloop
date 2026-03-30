@@ -36,6 +36,8 @@ mod speculative {
             num_ctx: None,
             cache_reuse: None,
             api_key_env: None,
+            min_tokens: None, repetition_penalty: None, top_k: None, min_p: None,
+            stop_token_ids: None, truncate_prompt_tokens: None, guided_mode: None, guided_pattern: None,
         };
         let agent_cfg = edgeloop::config::AgentConfig {
             system_prompt: "You are a helpful assistant. Use tools when asked.".into(),

@@ -12,6 +12,8 @@ mod cache_tests {
             endpoint: "http://localhost:11434".into(),
             model: "qwen2.5-coder:7b".into(),
             slot_id: None, n_keep: None, keep_alive: None, thinking: false, grammar: None, seed: None, num_ctx: None, cache_reuse: None, api_key_env: None,
+            min_tokens: None, repetition_penalty: None, top_k: None, min_p: None,
+            stop_token_ids: None, truncate_prompt_tokens: None, guided_mode: None, guided_pattern: None,
         };
         let agent_cfg = edgeloop::config::AgentConfig {
             system_prompt: "You are helpful. Be very concise. One sentence max.".into(),
