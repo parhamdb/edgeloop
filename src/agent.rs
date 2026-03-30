@@ -53,6 +53,9 @@ pub struct Agent {
     max_retries: usize,
     temperature: f64,
     pub cache: Mutex<CacheManager>,
+    /// Persistent conversation history across run() calls.
+    /// Each run appends user + assistant messages, maximizing KV cache reuse.
+    conversation: Mutex<Vec<Message>>,
 }
 
 impl Agent {
@@ -61,35 +64,45 @@ impl Agent {
         let template = get_template(&agent_config.template);
         let mut cache = CacheManager::new(cache_config.max_context, cache_config.truncation_threshold);
         cache.system_prompt_tokens = system_prompt.len() / 4;
-        Self { backend, tools, system_prompt, template, max_iterations: agent_config.max_iterations, max_retries: agent_config.max_retries, temperature: agent_config.temperature, cache: Mutex::new(cache) }
+        Self {
+            backend, tools, system_prompt, template,
+            max_iterations: agent_config.max_iterations,
+            max_retries: agent_config.max_retries,
+            temperature: agent_config.temperature,
+            cache: Mutex::new(cache),
+            conversation: Mutex::new(Vec::new()),
+        }
     }
 
+    /// Run the agent loop. Conversation history persists across calls
+    /// so the LLM backend can reuse its KV cache for the shared prefix.
     pub async fn run(&self, message: &str) -> String {
-        let mut history = vec![Message::user(message)];
+        // Append user message to persistent conversation
+        self.conversation.lock().await.push(Message::user(message));
 
         for iteration in 0..self.max_iterations {
             info!("Agent loop iteration {}", iteration + 1);
 
-            // Truncate if needed
+            // Truncate persistent history if needed
             {
                 let cache = self.cache.lock().await;
-                if cache.needs_truncation() && history.len() > 3 {
+                let mut conv = self.conversation.lock().await;
+                if cache.needs_truncation() && conv.len() > 3 {
                     let target = cache.truncation_target();
-                    let keep = (target / 50).max(3).min(history.len());
-                    let trimmed = history.len() - keep - 1;
-                    let first = history[0].clone();
-                    let recent: Vec<_> = history[history.len() - keep..].to_vec();
-                    drop(cache);
-                    let mut new_history = vec![first, Message::user(&format!("[{} earlier messages omitted]", trimmed))];
-                    new_history.extend(recent);
-                    history = new_history;
+                    let keep = (target / 50).max(3).min(conv.len());
+                    let trimmed = conv.len() - keep - 1;
+                    let first = conv[0].clone();
+                    let recent: Vec<_> = conv[conv.len() - keep..].to_vec();
+                    *conv = vec![first, Message::user(&format!("[{} earlier messages omitted]", trimmed))];
+                    conv.extend(recent);
                     info!("Truncated {} messages", trimmed);
                 }
             }
 
+            let history = self.conversation.lock().await.clone();
             let prompt = self.format_prompt(&history);
             let mut messages = vec![Message::system(&self.system_prompt)];
-            messages.extend(history.clone());
+            messages.extend(history);
 
             { self.cache.lock().await.update_history_tokens(prompt.len() / 4); }
 
@@ -115,10 +128,13 @@ impl Agent {
             if tool_call.is_none() {
                 if repair::looks_like_broken_tool_call(&response_text) && iteration < self.max_retries {
                     warn!("Broken tool call, retrying");
-                    history.push(Message::assistant(&response_text));
-                    history.push(Message::user(&format!("Your response was not valid. Respond with a valid tool call JSON or plain text.\n\n{}", TOOL_CALL_FORMAT)));
+                    let mut conv = self.conversation.lock().await;
+                    conv.push(Message::assistant(&response_text));
+                    conv.push(Message::user(&format!("Your response was not valid. Respond with a valid tool call JSON or plain text.\n\n{}", TOOL_CALL_FORMAT)));
                     continue;
                 }
+                // Final response — append assistant reply to conversation for next run
+                self.conversation.lock().await.push(Message::assistant(&response_text));
                 info!("Final response");
                 self.cache.lock().await.log_summary();
                 return response_text;
@@ -135,13 +151,24 @@ impl Agent {
             let result = tool::execute_tool(tool_def, &tc.arguments).await;
             info!("Tool result: {}", &result[..result.len().min(100)]);
 
-            history.push(Message::assistant(&response_text));
-            history.push(Message::user(&format!("Tool '{}' returned:\n{}", tc.name, result)));
+            let mut conv = self.conversation.lock().await;
+            conv.push(Message::assistant(&response_text));
+            conv.push(Message::user(&format!("Tool '{}' returned:\n{}", tc.name, result)));
         }
 
         warn!("Max iterations reached");
         self.cache.lock().await.log_summary();
         format!("Error: Maximum iterations ({}) reached", self.max_iterations)
+    }
+
+    /// Clear conversation history (start a new session).
+    pub async fn clear_history(&self) {
+        self.conversation.lock().await.clear();
+    }
+
+    /// Get current conversation length.
+    pub async fn history_len(&self) -> usize {
+        self.conversation.lock().await.len()
     }
 
     fn format_prompt(&self, history: &[Message]) -> String {
