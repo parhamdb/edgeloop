@@ -108,8 +108,11 @@ impl Agent {
 
             let max_tokens = { self.cache.lock().await.remaining_tokens().max(256) };
 
+            // Stop sequences prevent over-generation — chat template EOS tokens
+            let stop = vec!["<|im_end|>".to_string(), "<|eot_id|>".to_string(), "</s>".to_string()];
+
             let mut response_text = String::new();
-            let mut stream = self.backend.stream_completion(&prompt, &messages, self.temperature, max_tokens, &[]);
+            let mut stream = self.backend.stream_completion(&prompt, &messages, self.temperature, max_tokens, &stop);
             while let Some(result) = stream.next().await {
                 match result {
                     Ok(token) => response_text.push_str(&token),
