@@ -42,8 +42,15 @@ const MISTRAL: ChatTemplate = ChatTemplate {
     assistant_start: "",
 };
 
+const GEMMA4: ChatTemplate = ChatTemplate {
+    system: "<|turn>system\n{content}<turn|>\n",
+    user: "<|turn>user\n{content}<turn|>\n",
+    assistant: "<|turn>model\n{content}<turn|>\n",
+    assistant_start: "<|turn>model\n",
+};
+
 fn get_template(name: &str) -> &'static ChatTemplate {
-    match name { "llama3" => &LLAMA3, "mistral" => &MISTRAL, _ => &CHATML }
+    match name { "llama3" => &LLAMA3, "mistral" => &MISTRAL, "gemma4" => &GEMMA4, _ => &CHATML }
 }
 
 pub struct Agent {
@@ -113,7 +120,7 @@ impl Agent {
             let max_tokens = { self.cache.lock().await.remaining_tokens().max(256) };
 
             // Stop sequences prevent over-generation — chat template EOS tokens
-            let stop = vec!["<|im_end|>".to_string(), "<|eot_id|>".to_string(), "</s>".to_string()];
+            let stop = vec!["<|im_end|>".to_string(), "<|eot_id|>".to_string(), "</s>".to_string(), "<turn|>".to_string()];
 
             let mut response_text = String::new();
             let mut stream = self.backend.stream_completion(&prompt, &messages, self.temperature, max_tokens, &stop);
@@ -342,5 +349,17 @@ mod tests {
     async fn test_non_parallel_system_prompt_no_array_format() {
         let agent = make_agent(vec![], vec![make_tool("read_file")]);
         assert!(!agent.system_prompt.contains("multiple tools at once"));
+    }
+
+    #[tokio::test]
+    async fn test_prompt_is_gemma4() {
+        let backend = Arc::new(MockBackend::new(vec!["ok".into()]));
+        let agent_config = AgentConfig { system_prompt: "You are helpful.".into(), template: "gemma4".into(), max_tokens: 4096, max_iterations: 10, max_retries: 2, temperature: 0.1, parallel_tools: false };
+        let cache_config = CacheConfig { max_context: 4096, truncation_threshold: 0.8 };
+        let agent = Agent::new(backend, vec![], &agent_config, &cache_config);
+        let prompt = agent.format_prompt(&[Message::user("hello")]);
+        assert!(prompt.contains("<|turn>system\n"));
+        assert!(prompt.contains("<|turn>user\nhello<turn|>"));
+        assert!(prompt.ends_with("<|turn>model\n"));
     }
 }

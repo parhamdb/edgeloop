@@ -9,7 +9,7 @@ src/                                    # ~1,500 lines Rust
 ├── main.rs                             # clap CLI, config load, wire agent + transports
 ├── lib.rs                              # Public module exports for integration tests
 ├── config.rs                           # TOML structs, ${VAR:-default} env expansion, includes, tool loading
-├── agent.rs                            # ReAct loop, parallel tool calls, 3 chat templates, truncation
+├── agent.rs                            # ReAct loop, parallel tool calls, 4 chat templates, truncation
 ├── repair.rs                           # JSON extract/fix, Levenshtein fuzzy match, positional arg mapping
 ├── tool.rs                             # sh -c subprocess executor, {arg} substitution, timeout
 ├── cache.rs                            # CacheStats + CacheManager — prefill tracking, truncation at 80%
@@ -39,7 +39,8 @@ examples/                               # Example configs
 ├── home-automation.toml                # MQTT + WebSocket + Ollama
 ├── minimal-openwrt.toml                # CLI + remote llama-server
 ├── cloud-openai.toml                   # CLI + WebSocket + OpenAI API
-└── local-vllm.toml                     # CLI + vLLM with guided decoding
+├── local-vllm.toml                     # CLI + vLLM with guided decoding
+└── local-gemma4.toml                   # CLI + Ollama + Gemma 4 26B-A4B
 ```
 
 ## Building
@@ -48,7 +49,7 @@ examples/                               # Example configs
 cargo build                             # debug, default features
 cargo build --release --features full   # all backends + transports (5.0MB)
 cargo build --release                   # default: ollama + llama-server + cli (4.4MB)
-cargo test --bin edgeloop               # 56 unit tests
+cargo test --bin edgeloop               # 57 unit tests
 cargo test --test integration_test      # 5 integration tests (needs Ollama)
 cargo test --test benchmark -- --nocapture  # performance benchmarks
 ```
