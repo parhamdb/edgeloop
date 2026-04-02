@@ -12,6 +12,8 @@ use crate::tool;
 
 const TOOL_CALL_FORMAT: &str = "When a task requires a tool, call it with ONLY a JSON object:\n{\"tool\": \"tool_name_here\", \"arguments\": {\"param_name\": \"value\"}}\n\nUse exact parameter names shown above. After getting tool results, respond with plain text.\nIf you can answer without tools, respond directly with plain text.";
 
+const TOOL_CALL_FORMAT_PARALLEL: &str = "When a task requires a tool, call it with ONLY a JSON object:\n{\"tool\": \"tool_name_here\", \"arguments\": {\"param_name\": \"value\"}}\n\nTo call multiple tools at once, use a JSON array:\n[{\"tool\": \"tool1\", \"arguments\": {...}}, {\"tool\": \"tool2\", \"arguments\": {...}}]\n\nUse exact parameter names shown above. After getting tool results, respond with plain text.\nIf you can answer without tools, respond directly with plain text.";
+
 struct ChatTemplate {
     system: &'static str,
     user: &'static str,
@@ -52,6 +54,7 @@ pub struct Agent {
     max_iterations: usize,
     max_retries: usize,
     temperature: f64,
+    parallel_tools: bool,
     pub cache: Mutex<CacheManager>,
     /// Persistent conversation history across run() calls.
     /// Each run appends user + assistant messages, maximizing KV cache reuse.
@@ -60,7 +63,7 @@ pub struct Agent {
 
 impl Agent {
     pub fn new(backend: Arc<dyn Backend>, tools: Vec<ToolDef>, agent_config: &AgentConfig, cache_config: &CacheConfig) -> Self {
-        let system_prompt = build_system_prompt(&agent_config.system_prompt, &tools);
+        let system_prompt = build_system_prompt(&agent_config.system_prompt, &tools, agent_config.parallel_tools);
         let template = get_template(&agent_config.template);
         let mut cache = CacheManager::new(cache_config.max_context, cache_config.truncation_threshold);
         cache.system_prompt_tokens = system_prompt.len() / 4;
@@ -69,6 +72,7 @@ impl Agent {
             max_iterations: agent_config.max_iterations,
             max_retries: agent_config.max_retries,
             temperature: agent_config.temperature,
+            parallel_tools: agent_config.parallel_tools,
             cache: Mutex::new(cache),
             conversation: Mutex::new(Vec::new()),
         }
@@ -126,14 +130,20 @@ impl Agent {
                 self.cache.lock().await.record(stats);
             }
 
-            let tool_call = repair::repair_tool_call(&response_text, &self.tools);
+            let tool_calls = if self.parallel_tools {
+                repair::repair_tool_calls(&response_text, &self.tools)
+            } else {
+                repair::repair_tool_call(&response_text, &self.tools)
+                    .into_iter().collect()
+            };
 
-            if tool_call.is_none() {
+            if tool_calls.is_empty() {
+                let format_hint = if self.parallel_tools { TOOL_CALL_FORMAT_PARALLEL } else { TOOL_CALL_FORMAT };
                 if repair::looks_like_broken_tool_call(&response_text) && iteration < self.max_retries {
                     warn!("Broken tool call, retrying");
                     let mut conv = self.conversation.lock().await;
                     conv.push(Message::assistant(&response_text));
-                    conv.push(Message::user(&format!("Your response was not valid. Respond with a valid tool call JSON or plain text.\n\n{}", TOOL_CALL_FORMAT)));
+                    conv.push(Message::user(&format!("Your response was not valid. Respond with a valid tool call JSON or plain text.\n\n{}", format_hint)));
                     continue;
                 }
                 // Final response — append assistant reply to conversation for next run
@@ -143,20 +153,62 @@ impl Agent {
                 return response_text;
             }
 
-            let tc = tool_call.unwrap();
-            info!("Executing tool: {}({:?})", tc.name, tc.arguments);
+            if tool_calls.len() == 1 {
+                // Single tool call — execute directly (no JoinSet overhead)
+                let tc = &tool_calls[0];
+                info!("Executing tool: {}({:?})", tc.name, tc.arguments);
 
-            let tool_def = match self.tools.iter().find(|t| t.name == tc.name) {
-                Some(t) => t,
-                None => return format!("Error: Tool '{}' not found", tc.name),
-            };
+                let tool_def = match self.tools.iter().find(|t| t.name == tc.name) {
+                    Some(t) => t,
+                    None => return format!("Error: Tool '{}' not found", tc.name),
+                };
 
-            let result = tool::execute_tool(tool_def, &tc.arguments).await;
-            info!("Tool result: {}", &result[..result.len().min(100)]);
+                let result = tool::execute_tool(tool_def, &tc.arguments).await;
+                info!("Tool result: {}", &result[..result.len().min(100)]);
 
-            let mut conv = self.conversation.lock().await;
-            conv.push(Message::assistant(&response_text));
-            conv.push(Message::user(&format!("Tool '{}' returned:\n{}", tc.name, result)));
+                let mut conv = self.conversation.lock().await;
+                conv.push(Message::assistant(&response_text));
+                conv.push(Message::user(&format!("Tool '{}' returned:\n{}", tc.name, result)));
+            } else {
+                // Multiple tool calls — execute in parallel
+                info!("Executing {} tools in parallel", tool_calls.len());
+
+                let mut set = tokio::task::JoinSet::new();
+                for tc in &tool_calls {
+                    let tool_def = match self.tools.iter().find(|t| t.name == tc.name) {
+                        Some(t) => t.clone(),
+                        None => {
+                            warn!("Tool '{}' not found, skipping", tc.name);
+                            continue;
+                        }
+                    };
+                    let args = tc.arguments.clone();
+                    let name = tc.name.clone();
+                    set.spawn(async move {
+                        let result = tool::execute_tool(&tool_def, &args).await;
+                        (name, result)
+                    });
+                }
+
+                let mut results: Vec<(String, String)> = Vec::new();
+                while let Some(res) = set.join_next().await {
+                    match res {
+                        Ok((name, output)) => {
+                            info!("Tool '{}' result: {}", name, &output[..output.len().min(100)]);
+                            results.push((name, output));
+                        }
+                        Err(e) => warn!("Tool task panicked: {}", e),
+                    }
+                }
+
+                let mut conv = self.conversation.lock().await;
+                conv.push(Message::assistant(&response_text));
+                let batch = results.iter()
+                    .map(|(name, output)| format!("Tool '{}' returned:\n{}", name, output))
+                    .collect::<Vec<_>>()
+                    .join("\n\n");
+                conv.push(Message::user(&batch));
+            }
         }
 
         warn!("Max iterations reached");
@@ -189,12 +241,13 @@ impl Agent {
     }
 }
 
-fn build_system_prompt(base: &str, tools: &[ToolDef]) -> String {
+fn build_system_prompt(base: &str, tools: &[ToolDef], parallel_tools: bool) -> String {
     let mut parts = vec![base.to_string()];
     if !tools.is_empty() {
         parts.push("\n\nTools:".to_string());
         for t in tools { parts.push(tool::format_tool_schema(t)); }
-        parts.push(format!("\n{}", TOOL_CALL_FORMAT));
+        let format = if parallel_tools { TOOL_CALL_FORMAT_PARALLEL } else { TOOL_CALL_FORMAT };
+        parts.push(format!("\n{}", format));
     }
     parts.join("\n")
 }
@@ -214,7 +267,7 @@ mod tests {
 
     fn make_agent(responses: Vec<String>, tools: Vec<ToolDef>) -> Agent {
         let backend = Arc::new(MockBackend::new(responses));
-        let agent_config = AgentConfig { system_prompt: "You are helpful.".into(), template: "chatml".into(), max_tokens: 4096, max_iterations: 10, max_retries: 2, temperature: 0.1 };
+        let agent_config = AgentConfig { system_prompt: "You are helpful.".into(), template: "chatml".into(), max_tokens: 4096, max_iterations: 10, max_retries: 2, temperature: 0.1, parallel_tools: false };
         let cache_config = CacheConfig { max_context: 4096, truncation_threshold: 0.8 };
         Agent::new(backend, tools, &agent_config, &cache_config)
     }
@@ -249,5 +302,45 @@ mod tests {
         assert!(prompt.contains("<|im_start|>system"));
         assert!(prompt.contains("<|im_start|>user"));
         assert!(prompt.ends_with("<|im_start|>assistant\n"));
+    }
+
+    fn make_parallel_agent(responses: Vec<String>, tools: Vec<ToolDef>) -> Agent {
+        let backend = Arc::new(MockBackend::new(responses));
+        let agent_config = AgentConfig { system_prompt: "You are helpful.".into(), template: "chatml".into(), max_tokens: 4096, max_iterations: 10, max_retries: 2, temperature: 0.1, parallel_tools: true };
+        let cache_config = CacheConfig { max_context: 4096, truncation_threshold: 0.8 };
+        Agent::new(backend, tools, &agent_config, &cache_config)
+    }
+
+    fn make_echo_tool(name: &str) -> ToolDef {
+        let mut params = HashMap::new();
+        params.insert("text".to_string(), ParamDef { param_type: "string".to_string(), required: true, default: None });
+        ToolDef { name: name.to_string(), description: format!("Echo for {}", name), command: "echo '{text}'".to_string(), stdin: None, timeout: 5, workdir: None, env: HashMap::new(), parameters: params }
+    }
+
+    #[tokio::test]
+    async fn test_parallel_tool_calls() {
+        let agent = make_parallel_agent(
+            vec![
+                r#"[{"tool": "tool_a", "arguments": {"text": "hello"}}, {"tool": "tool_b", "arguments": {"text": "world"}}]"#.into(),
+                "Both tools returned results.".into(),
+            ],
+            vec![make_echo_tool("tool_a"), make_echo_tool("tool_b")],
+        );
+        let result = agent.run("Call both tools").await;
+        assert_eq!(result, "Both tools returned results.");
+        // Conversation should have: user, assistant (array), user (batch results), assistant (final)
+        assert_eq!(agent.history_len().await, 4);
+    }
+
+    #[tokio::test]
+    async fn test_parallel_system_prompt_has_array_format() {
+        let agent = make_parallel_agent(vec![], vec![make_echo_tool("tool_a")]);
+        assert!(agent.system_prompt.contains("multiple tools at once"));
+    }
+
+    #[tokio::test]
+    async fn test_non_parallel_system_prompt_no_array_format() {
+        let agent = make_agent(vec![], vec![make_tool("read_file")]);
+        assert!(!agent.system_prompt.contains("multiple tools at once"));
     }
 }

@@ -46,6 +46,7 @@ mod speculative {
             max_iterations: 8,
             max_retries: 2,
             temperature: 0.1,
+            parallel_tools: false,
         };
         let cache_cfg = edgeloop::config::CacheConfig {
             max_context: 4096,

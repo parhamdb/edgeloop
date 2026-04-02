@@ -10,28 +10,50 @@ pub struct ToolCall {
     pub arguments: HashMap<String, Value>,
 }
 
-pub fn repair_tool_call(text: &str, tools: &[ToolDef]) -> Option<ToolCall> {
-    let raw = extract_json(text)?;
+/// Parse multiple tool calls from LLM output. Returns empty vec if no valid tool calls found.
+pub fn repair_tool_calls(text: &str, tools: &[ToolDef]) -> Vec<ToolCall> {
+    let raw = match extract_json(text) {
+        Some(r) => r,
+        None => return vec![],
+    };
     let repaired = repair_json(&raw);
 
     let parsed: Value = match serde_json::from_str(&repaired) {
         Ok(v) => v,
         Err(_) => {
             debug!("JSON repair failed for: {}", &raw[..raw.len().min(100)]);
-            return None;
+            return vec![];
         }
     };
 
-    let tool_name = parsed.get("tool")?.as_str()?;
-    let arguments = parsed
+    let available: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
+
+    match &parsed {
+        Value::Array(items) => items
+            .iter()
+            .filter_map(|item| parse_single_tool_call(item, tools, &available))
+            .collect(),
+        Value::Object(_) => parse_single_tool_call(&parsed, tools, &available)
+            .into_iter()
+            .collect(),
+        _ => vec![],
+    }
+}
+
+/// Parse a single tool call from LLM output. Backward-compatible wrapper.
+pub fn repair_tool_call(text: &str, tools: &[ToolDef]) -> Option<ToolCall> {
+    repair_tool_calls(text, tools).into_iter().next()
+}
+
+fn parse_single_tool_call(value: &Value, tools: &[ToolDef], available: &[&str]) -> Option<ToolCall> {
+    let tool_name = value.get("tool")?.as_str()?;
+    let arguments: HashMap<String, Value> = value
         .get("arguments")
         .and_then(|v| v.as_object())
         .map(|m| m.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
         .unwrap_or_default();
 
-    let available: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
-    let matched = fuzzy_match_tool(tool_name, &available, 2)?;
-
+    let matched = fuzzy_match_tool(tool_name, available, 2)?;
     let tool_def = tools.iter().find(|t| t.name == matched)?;
     let coerced = coerce_arguments(&arguments, tool_def);
 
@@ -52,7 +74,17 @@ pub fn extract_json(text: &str) -> Option<String> {
         return Some(caps[1].trim().to_string());
     }
 
-    let start = text.find('{')?;
+    // Find first '{' or '[', whichever comes first
+    let first_brace = text.find('{');
+    let first_bracket = text.find('[');
+
+    let (start, open_ch, close_ch) = match (first_brace, first_bracket) {
+        (Some(b), Some(k)) if k < b => (k, '[', ']'),
+        (Some(b), _) => (b, '{', '}'),
+        (None, Some(k)) => (k, '[', ']'),
+        (None, None) => return None,
+    };
+
     let bytes = text.as_bytes();
     let mut depth = 0i32;
     let mut in_string = false;
@@ -64,8 +96,8 @@ pub fn extract_json(text: &str) -> Option<String> {
         if c == '\\' { escape = true; continue; }
         if c == '"' { in_string = !in_string; continue; }
         if in_string { continue; }
-        if c == '{' { depth += 1; }
-        else if c == '}' {
+        if c == open_ch { depth += 1; }
+        else if c == close_ch {
             depth -= 1;
             if depth == 0 { return Some(text[start..=i].to_string()); }
         }
@@ -261,5 +293,71 @@ mod tests {
     #[test] fn test_pipeline_hallucinated() {
         let tools = vec![make_tool("read_file", vec![("path", "string", true)])];
         assert!(repair_tool_call("{\"tool\": \"delete_everything\", \"arguments\": {}}", &tools).is_none());
+    }
+
+    #[test] fn test_extract_json_array() {
+        let text = r#"I'll call both: [{"tool": "a", "arguments": {}}, {"tool": "b", "arguments": {}}]"#;
+        let extracted = extract_json(text).unwrap();
+        let parsed: Value = serde_json::from_str(&extracted).unwrap();
+        assert!(parsed.is_array());
+        assert_eq!(parsed.as_array().unwrap().len(), 2);
+    }
+
+    #[test] fn test_extract_json_array_in_fence() {
+        let text = "```json\n[{\"tool\": \"a\"}, {\"tool\": \"b\"}]\n```";
+        let extracted = extract_json(text).unwrap();
+        let parsed: Value = serde_json::from_str(&extracted).unwrap();
+        assert!(parsed.is_array());
+    }
+
+    #[test] fn test_extract_json_brace_before_bracket() {
+        // When { comes before [, should extract the object not the array
+        let text = r#"{"tool": "a"} and then [1, 2, 3]"#;
+        let extracted = extract_json(text).unwrap();
+        assert!(extracted.starts_with('{'));
+    }
+
+    #[test] fn test_repair_tool_calls_array() {
+        let tools = vec![
+            make_tool("speak", vec![("text", "string", true)]),
+            make_tool("get_time", vec![]),
+        ];
+        let text = r#"[{"tool": "speak", "arguments": {"text": "hi"}}, {"tool": "get_time", "arguments": {}}]"#;
+        let calls = repair_tool_calls(text, &tools);
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0].name, "speak");
+        assert_eq!(calls[1].name, "get_time");
+    }
+
+    #[test] fn test_repair_tool_calls_single_still_works() {
+        let tools = vec![make_tool("read_file", vec![("path", "string", true)])];
+        let text = r#"{"tool": "read_file", "arguments": {"path": "/tmp/x"}}"#;
+        let calls = repair_tool_calls(text, &tools);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "read_file");
+    }
+
+    #[test] fn test_repair_tool_calls_mixed_valid_invalid() {
+        let tools = vec![make_tool("speak", vec![("text", "string", true)])];
+        let text = r#"[{"tool": "speak", "arguments": {"text": "hi"}}, {"tool": "nonexistent_tool", "arguments": {}}]"#;
+        let calls = repair_tool_calls(text, &tools);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "speak");
+    }
+
+    #[test] fn test_repair_tool_calls_malformed_array() {
+        let tools = vec![
+            make_tool("speak", vec![("text", "string", true)]),
+            make_tool("get_time", vec![]),
+        ];
+        // Trailing comma + single quotes
+        let text = r#"[{'tool': 'speak', 'arguments': {'text': 'hi'}}, {'tool': 'get_time', 'arguments': {}},]"#;
+        let calls = repair_tool_calls(text, &tools);
+        assert_eq!(calls.len(), 2);
+    }
+
+    #[test] fn test_repair_tool_calls_empty_text() {
+        let tools = vec![make_tool("read_file", vec![("path", "string", true)])];
+        assert!(repair_tool_calls("Just plain text, no JSON.", &tools).is_empty());
     }
 }

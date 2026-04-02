@@ -9,7 +9,7 @@ src/                                    # ~1,500 lines Rust
 ├── main.rs                             # clap CLI, config load, wire agent + transports
 ├── lib.rs                              # Public module exports for integration tests
 ├── config.rs                           # TOML structs, ${VAR:-default} env expansion, includes, tool loading
-├── agent.rs                            # ReAct loop, 3 chat templates (ChatML/Llama3/Mistral), truncation
+├── agent.rs                            # ReAct loop, parallel tool calls, 3 chat templates, truncation
 ├── repair.rs                           # JSON extract/fix, Levenshtein fuzzy match, positional arg mapping
 ├── tool.rs                             # sh -c subprocess executor, {arg} substitution, timeout
 ├── cache.rs                            # CacheStats + CacheManager — prefill tracking, truncation at 80%
@@ -18,7 +18,8 @@ src/                                    # ~1,500 lines Rust
 │   ├── mod.rs                          # Backend trait (stream_completion + token_count + last_cache_stats)
 │   ├── ollama.rs                       # /api/chat NDJSON streaming, thinking mode, KV cache stats
 │   ├── llama_server.rs                 # /completion SSE, cache_prompt + id_slot, /tokenize
-│   └── openai.rs                       # /v1/chat/completions SSE, works with any compatible API
+│   ├── openai.rs                       # /v1/chat/completions SSE, works with any compatible API
+│   └── vllm.rs                         # vLLM backend: guided decoding, prefix cache stats, /tokenize
 └── transport/
     ├── mod.rs                          # Transport trait (serve + name), factory
     ├── cli.rs                          # stdin/stdout REPL
@@ -37,7 +38,8 @@ tools/                                  # Example tool packages
 examples/                               # Example configs
 ├── home-automation.toml                # MQTT + WebSocket + Ollama
 ├── minimal-openwrt.toml                # CLI + remote llama-server
-└── cloud-openai.toml                   # CLI + WebSocket + OpenAI API
+├── cloud-openai.toml                   # CLI + WebSocket + OpenAI API
+└── local-vllm.toml                     # CLI + vLLM with guided decoding
 ```
 
 ## Building
@@ -46,7 +48,7 @@ examples/                               # Example configs
 cargo build                             # debug, default features
 cargo build --release --features full   # all backends + transports (5.0MB)
 cargo build --release                   # default: ollama + llama-server + cli (4.4MB)
-cargo test --bin edgeloop               # 45 unit tests
+cargo test --bin edgeloop               # 56 unit tests
 cargo test --test integration_test      # 5 integration tests (needs Ollama)
 cargo test --test benchmark -- --nocapture  # performance benchmarks
 ```
@@ -54,7 +56,7 @@ cargo test --test benchmark -- --nocapture  # performance benchmarks
 ## Feature flags
 
 default: ollama, llama-server, cli-transport
-Backends: ollama, llama-server, openai
+Backends: ollama, llama-server, openai, vllm
 Transports: cli-transport, websocket, mqtt, unix-socket, tcp-socket
 
 ## Key patterns
@@ -63,8 +65,9 @@ Transports: cli-transport, websocket, mqtt, unix-socket, tcp-socket
 - Backend trait: `stream_completion()` returns `BoxStream<Result<String>>`, `token_count()`, `last_cache_stats()`.
 - Transport trait: `serve(handler)` — handler is `Arc<dyn Fn(TransportRequest)>`.
 - Non-CLI transports use JSON protocol: `{"message":"...","session":"..."}` → `{"type":"done","content":"...","session":"..."}`.
-- Repair pipeline: extract_json → repair_json → fuzzy_match_tool → coerce_arguments.
-- Agent loop: build prompt → stream backend → repair → tool or return. Append-only history.
+- Repair pipeline: `repair_tool_calls()` handles single `{...}` and array `[{...}, ...]`; delegates to `parse_single_tool_call()`. Fuzzy match via Levenshtein, positional arg coercion. Legacy `repair_tool_call()` returns the first result.
+- Agent loop: build prompt → stream backend → repair → tool(s) or return. Append-only history.
+- Parallel tool calls: opt-in via `parallel_tools = true` in `[agent]`. LLM emits a JSON array; tools execute concurrently via `tokio::task::JoinSet`; all results are batched into one user message. Recommended for 7B+ models. Default is false.
 - All backends use `reqwest` with `rustls-tls` — no OpenSSL, clean static linking.
 
 ## Performance (RTX 4070, Ollama)

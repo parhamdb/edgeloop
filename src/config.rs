@@ -32,6 +32,11 @@ pub struct AgentConfig {
     pub max_retries: usize,
     #[serde(default = "default_temperature")]
     pub temperature: f64,
+    /// Allow the LLM to output multiple tool calls in a single response as a JSON array.
+    /// When true, tools execute in parallel and results are batched.
+    /// Default false — opt in for capable models (7B+).
+    #[serde(default)]
+    pub parallel_tools: bool,
 }
 
 #[derive(Debug, Deserialize, Clone)]

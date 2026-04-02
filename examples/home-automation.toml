@@ -7,6 +7,8 @@ system_prompt = "You are a home automation assistant. Control devices and report
 template = "chatml"
 max_tokens = 4096
 temperature = 0.3
+# Allow LLM to call multiple tools at once (e.g., speak + get_time in parallel)
+parallel_tools = true
 
 [backend]
 type = "ollama"

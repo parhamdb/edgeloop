@@ -23,6 +23,7 @@ mod long_chat {
             max_iterations: 8,
             max_retries: 2,
             temperature: 0.1,
+            parallel_tools: false,
         };
         let cache_cfg = edgeloop::config::CacheConfig { max_context: max_tokens, truncation_threshold: 0.8 };
         let backend = Arc::new(edgeloop::backend::ollama::OllamaBackend::new(&backend_cfg));

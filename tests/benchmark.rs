@@ -18,7 +18,7 @@ mod bench {
         let agent_cfg = edgeloop::config::AgentConfig {
             system_prompt: "You are helpful.".into(),
             template: "chatml".into(),
-            max_tokens: 4096, max_iterations: 8, max_retries: 2, temperature: 0.1,
+            max_tokens: 4096, max_iterations: 8, max_retries: 2, temperature: 0.1, parallel_tools: false,
         };
         let cache_cfg = edgeloop::config::CacheConfig { max_context: 4096, truncation_threshold: 0.8 };
         let backend = Arc::new(edgeloop::backend::ollama::OllamaBackend::new(&backend_cfg));
