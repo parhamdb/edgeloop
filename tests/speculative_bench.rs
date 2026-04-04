@@ -89,13 +89,13 @@ mod speculative {
     ) -> (u128, Vec<u128>) {
         // Warmup
         for _ in 0..warmup {
-            let _ = agent.run(prompt).await;
+            let _ = agent.run(prompt, &[]).await;
         }
 
         let mut times = Vec::with_capacity(runs);
         for _ in 0..runs {
             let start = Instant::now();
-            let _ = agent.run(prompt).await;
+            let _ = agent.run(prompt, &[]).await;
             times.push(start.elapsed().as_millis());
         }
 
@@ -179,7 +179,7 @@ mod speculative {
 
         for (name, prompt) in &prompts {
             let start = Instant::now();
-            let response = agent.run(prompt).await;
+            let response = agent.run(prompt, &[]).await;
             let elapsed = start.elapsed().as_millis();
             let resp_len = response.len();
             println!("  {:<12} {}ms  response_len={}", name, elapsed, resp_len);
@@ -205,7 +205,7 @@ mod speculative {
         let mut total_ms = 0u128;
         for (i, prompt) in turns.iter().enumerate() {
             let start = Instant::now();
-            let response = agent.run(prompt).await;
+            let response = agent.run(prompt, &[]).await;
             let elapsed = start.elapsed().as_millis();
             total_ms += elapsed;
             println!(

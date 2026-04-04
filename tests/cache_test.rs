@@ -42,7 +42,7 @@ mod cache_tests {
         println!("\n=== Persistent History — Same Agent, Multiple Runs ===");
         for (i, turn) in turns.iter().enumerate() {
             let start = Instant::now();
-            let response = agent.run(turn).await;
+            let response = agent.run(turn, &[]).await;
             let elapsed = start.elapsed();
             let history_len = agent.history_len().await;
             times.push(elapsed);
@@ -59,7 +59,7 @@ mod cache_tests {
         }
 
         // Verify context is maintained — the model should remember Paris
-        let response = agent.run("What was the first city we discussed?").await;
+        let response = agent.run("What was the first city we discussed?", &[]).await;
         println!("  Context: {} | remembers_paris={}", &response[..response.len().min(60)], response.to_lowercase().contains("paris"));
         assert!(response.to_lowercase().contains("paris"), "Should remember Paris from turn 1: {}", response);
 
@@ -80,7 +80,7 @@ mod cache_tests {
         let mut persistent_times = Vec::new();
         for i in 0..5 {
             let start = Instant::now();
-            let _ = agent_persistent.run(&format!("What is {}+{}?", i, i+1)).await;
+            let _ = agent_persistent.run(&format!("What is {}+{}?", i, i+1), &[]).await;
             persistent_times.push(start.elapsed());
         }
 
@@ -89,7 +89,7 @@ mod cache_tests {
         for i in 0..5 {
             let agent_fresh = make_agent();
             let start = Instant::now();
-            let _ = agent_fresh.run(&format!("What is {}+{}?", i, i+1)).await;
+            let _ = agent_fresh.run(&format!("What is {}+{}?", i, i+1), &[]).await;
             fresh_times.push(start.elapsed());
         }
 
