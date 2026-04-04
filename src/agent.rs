@@ -87,9 +87,11 @@ impl Agent {
 
     /// Run the agent loop. Conversation history persists across calls
     /// so the LLM backend can reuse its KV cache for the shared prefix.
-    pub async fn run(&self, message: &str) -> String {
+    pub async fn run(&self, message: &str, images: &[crate::message::ImageAttachment]) -> String {
         // Append user message to persistent conversation
-        self.conversation.lock().await.push(Message::user(message));
+        self.conversation.lock().await.push(
+            Message::user_with_images(message, images.to_vec())
+        );
 
         for iteration in 0..self.max_iterations {
             info!("Agent loop iteration {}", iteration + 1);
@@ -241,7 +243,15 @@ impl Agent {
                 "assistant" => self.template.assistant,
                 _ => continue,
             };
-            parts.push(tmpl.replace("{content}", &msg.content));
+            let mut content = msg.content.clone();
+            for img in &msg.images {
+                if let Some(desc) = &img.description {
+                    content.push_str(&format!("\n[Image: {}]", desc));
+                } else {
+                    content.push_str("\n[Image attached]");
+                }
+            }
+            parts.push(tmpl.replace("{content}", &content));
         }
         parts.push(self.template.assistant_start.to_string());
         parts.join("")
@@ -282,7 +292,7 @@ mod tests {
     #[tokio::test]
     async fn test_simple_response() {
         let agent = make_agent(vec!["Hello there!".into()], vec![]);
-        assert_eq!(agent.run("Hi").await, "Hello there!");
+        assert_eq!(agent.run("Hi", &[]).await, "Hello there!");
     }
 
     #[tokio::test]
@@ -291,7 +301,7 @@ mod tests {
             vec![r#"{"tool": "read_file", "arguments": {"path": "/tmp/test"}}"#.into(), "The file says: contents of /tmp/test".into()],
             vec![make_tool("read_file")],
         );
-        let result = agent.run("Read /tmp/test").await;
+        let result = agent.run("Read /tmp/test", &[]).await;
         assert!(result.contains("contents of /tmp/test"));
     }
 
@@ -333,7 +343,7 @@ mod tests {
             ],
             vec![make_echo_tool("tool_a"), make_echo_tool("tool_b")],
         );
-        let result = agent.run("Call both tools").await;
+        let result = agent.run("Call both tools", &[]).await;
         assert_eq!(result, "Both tools returned results.");
         // Conversation should have: user, assistant (array), user (batch results), assistant (final)
         assert_eq!(agent.history_len().await, 4);
@@ -361,5 +371,29 @@ mod tests {
         assert!(prompt.contains("<|turn>system\n"));
         assert!(prompt.contains("<|turn>user\nhello<turn|>"));
         assert!(prompt.ends_with("<|turn>model\n"));
+    }
+
+    #[tokio::test]
+    async fn test_run_with_images_stores_them() {
+        let agent = make_agent(vec!["I see a cat!".into()], vec![]);
+        let images = vec![crate::message::ImageAttachment {
+            b64: "abc".into(),
+            description: Some("a cat".into()),
+        }];
+        let result = agent.run("What do you see?", &images).await;
+        assert_eq!(result, "I see a cat!");
+        let conv = agent.conversation.lock().await;
+        assert_eq!(conv.len(), 2);
+        assert_eq!(conv[0].images.len(), 1);
+        assert_eq!(conv[0].images[0].b64, "abc");
+    }
+
+    #[tokio::test]
+    async fn test_run_without_images_empty() {
+        let agent = make_agent(vec!["Hello!".into()], vec![]);
+        let result = agent.run("Hi", &[]).await;
+        assert_eq!(result, "Hello!");
+        let conv = agent.conversation.lock().await;
+        assert!(conv[0].images.is_empty());
     }
 }
