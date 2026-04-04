@@ -61,14 +61,14 @@ mod tests {
             system_prompt: "You are a helpful assistant.".into(),
             template: "chatml".into(),
             max_tokens: 4096, max_iterations: 8, max_retries: 2, temperature: 0.1,
-            parallel_tools: false,
+            parallel_tools: false, stream_tokens: false,
         };
         let cache_cfg = edgeloop::config::CacheConfig { max_context: 4096, truncation_threshold: 0.8 };
         let backend_cfg = backend_config("llama-server", "http://localhost:8090", "");
         let backend = Arc::new(edgeloop::backend::llama_server::LlamaServerBackend::new(&backend_cfg));
         let agent = edgeloop::agent::Agent::new(backend, vec![], &agent_cfg, &cache_cfg);
 
-        let response = agent.run("What is 2+2? Answer with just the number.", &[]).await;
+        let response = agent.run("What is 2+2? Answer with just the number.", &[], None, "test").await;
         println!("[llama-server simple] {}", response);
         assert!(response.contains("4"), "Expected '4' in: {}", response);
     }
@@ -83,7 +83,7 @@ mod tests {
             system_prompt: "You are a helpful assistant.".into(),
             template: "chatml".into(),
             max_tokens: 4096, max_iterations: 8, max_retries: 2, temperature: 0.1,
-            parallel_tools: false,
+            parallel_tools: false, stream_tokens: false,
         };
         let cache_cfg = edgeloop::config::CacheConfig { max_context: 4096, truncation_threshold: 0.8 };
         let backend_cfg = backend_config("llama-server", "http://localhost:8090", "");
@@ -91,7 +91,7 @@ mod tests {
         let calculator = make_tool("calculator", "python3 -c 'print(eval(\"{expression}\"))'", vec![("expression", "string", true)]);
         let agent = edgeloop::agent::Agent::new(backend, vec![calculator], &agent_cfg, &cache_cfg);
 
-        let response = agent.run("What is 123 * 456? Use the calculator tool.", &[]).await;
+        let response = agent.run("What is 123 * 456? Use the calculator tool.", &[], None, "test").await;
         println!("[llama-server tool] {}", response);
         let clean = response.replace(",", "").replace(" ", "");
         assert!(clean.contains("56088"), "Expected '56088' in: {}", response);
@@ -113,7 +113,7 @@ mod tests {
             system_prompt: "You are a helpful assistant. When asked for multiple pieces of info, call multiple tools at once using a JSON array.".into(),
             template: "chatml".into(),
             max_tokens: 4096, max_iterations: 8, max_retries: 2, temperature: 0.1,
-            parallel_tools: true,
+            parallel_tools: true, stream_tokens: false,
         };
         let cache_cfg = edgeloop::config::CacheConfig { max_context: 4096, truncation_threshold: 0.8 };
         let backend_cfg = backend_config_thinking("ollama", "http://localhost:11434", "gemma4:26b");
@@ -122,7 +122,7 @@ mod tests {
         let uptime_tool = make_tool("get_uptime", "uptime -p", vec![]);
         let agent = edgeloop::agent::Agent::new(backend, vec![date_tool, uptime_tool], &agent_cfg, &cache_cfg);
 
-        let response = agent.run("What is today's date and the system uptime? Use both tools.", &[]).await;
+        let response = agent.run("What is today's date and the system uptime? Use both tools.", &[], None, "test").await;
         println!("[ollama parallel] {}", response);
         // The model should have called at least one tool and produced a response
         assert!(!response.is_empty(), "Response should not be empty");
@@ -142,7 +142,7 @@ mod tests {
             system_prompt: "You are a helpful assistant.".into(),
             template: "chatml".into(),
             max_tokens: 4096, max_iterations: 8, max_retries: 2, temperature: 0.1,
-            parallel_tools: true,
+            parallel_tools: true, stream_tokens: false,
         };
         let cache_cfg = edgeloop::config::CacheConfig { max_context: 4096, truncation_threshold: 0.8 };
         // Gemma 4 needs thinking=true for tool calls — without it, the model returns empty content
@@ -151,7 +151,7 @@ mod tests {
         let calculator = make_tool("calculator", "python3 -c 'print(eval(\"{expression}\"))'", vec![("expression", "string", true)]);
         let agent = edgeloop::agent::Agent::new(backend, vec![calculator], &agent_cfg, &cache_cfg);
 
-        let response = agent.run("What is 99 * 99? Use the calculator.", &[]).await;
+        let response = agent.run("What is 99 * 99? Use the calculator.", &[], None, "test").await;
         println!("[ollama single+parallel] {}", response);
         let clean = response.replace(",", "").replace(" ", "");
         assert!(clean.contains("9801"), "Expected '9801' in: {}", response);
@@ -169,7 +169,7 @@ mod tests {
             system_prompt: "You are a helpful assistant. When asked for multiple pieces of info, call multiple tools at once using a JSON array.".into(),
             template: "chatml".into(),
             max_tokens: 4096, max_iterations: 8, max_retries: 2, temperature: 0.1,
-            parallel_tools: true,
+            parallel_tools: true, stream_tokens: false,
         };
         let cache_cfg = edgeloop::config::CacheConfig { max_context: 4096, truncation_threshold: 0.8 };
         let backend_cfg = backend_config("llama-server", "http://localhost:8090", "");
@@ -178,7 +178,7 @@ mod tests {
         let uptime_tool = make_tool("get_uptime", "uptime -p", vec![]);
         let agent = edgeloop::agent::Agent::new(backend, vec![date_tool, uptime_tool], &agent_cfg, &cache_cfg);
 
-        let response = agent.run("What is today's date and the system uptime? Use both tools.", &[]).await;
+        let response = agent.run("What is today's date and the system uptime? Use both tools.", &[], None, "test").await;
         println!("[llama-server parallel] {}", response);
         assert!(!response.is_empty(), "Response should not be empty");
     }
@@ -199,14 +199,14 @@ mod tests {
             system_prompt: "You are a helpful assistant.".into(),
             template: "gemma4".into(),
             max_tokens: 4096, max_iterations: 8, max_retries: 2, temperature: 0.1,
-            parallel_tools: false,
+            parallel_tools: false, stream_tokens: false,
         };
         let cache_cfg = edgeloop::config::CacheConfig { max_context: 4096, truncation_threshold: 0.8 };
         let backend_cfg = backend_config("llama-server", "http://localhost:8090", "");
         let backend = Arc::new(edgeloop::backend::llama_server::LlamaServerBackend::new(&backend_cfg));
         let agent = edgeloop::agent::Agent::new(backend, vec![], &agent_cfg, &cache_cfg);
 
-        let response = agent.run("Say hello in one word.", &[]).await;
+        let response = agent.run("Say hello in one word.", &[], None, "test").await;
         println!("[llama-server gemma4-template] {}", response);
         // Template mismatch with model, but should still produce some output
         assert!(!response.is_empty(), "Response should not be empty");
@@ -224,14 +224,14 @@ mod tests {
             system_prompt: "You are a helpful assistant.".into(),
             template: "gemma4".into(),
             max_tokens: 4096, max_iterations: 8, max_retries: 2, temperature: 0.1,
-            parallel_tools: false,
+            parallel_tools: false, stream_tokens: false,
         };
         let cache_cfg = edgeloop::config::CacheConfig { max_context: 4096, truncation_threshold: 0.8 };
         let backend_cfg = backend_config("ollama", "http://localhost:11434", "gemma4:26b");
         let backend = Arc::new(edgeloop::backend::ollama::OllamaBackend::new(&backend_cfg));
         let agent = edgeloop::agent::Agent::new(backend, vec![], &agent_cfg, &cache_cfg);
 
-        let response = agent.run("What is 2+2? Answer with just the number.", &[]).await;
+        let response = agent.run("What is 2+2? Answer with just the number.", &[], None, "test").await;
         println!("[ollama gemma4 simple] {}", response);
         assert!(response.contains("4"), "Expected '4' in: {}", response);
     }
@@ -246,7 +246,7 @@ mod tests {
             system_prompt: "You are a helpful assistant.".into(),
             template: "gemma4".into(),
             max_tokens: 4096, max_iterations: 8, max_retries: 2, temperature: 0.1,
-            parallel_tools: false,
+            parallel_tools: false, stream_tokens: false,
         };
         let cache_cfg = edgeloop::config::CacheConfig { max_context: 4096, truncation_threshold: 0.8 };
         // Gemma 4 needs thinking=true for tool calls
@@ -255,7 +255,7 @@ mod tests {
         let calculator = make_tool("calculator", "python3 -c 'print(eval(\"{expression}\"))'", vec![("expression", "string", true)]);
         let agent = edgeloop::agent::Agent::new(backend, vec![calculator], &agent_cfg, &cache_cfg);
 
-        let response = agent.run("What is 123 * 456? Use the calculator tool.", &[]).await;
+        let response = agent.run("What is 123 * 456? Use the calculator tool.", &[], None, "test").await;
         println!("[ollama gemma4 tool] {}", response);
         let clean = response.replace(",", "").replace(" ", "");
         assert!(clean.contains("56088"), "Expected '56088' in: {}", response);
@@ -271,7 +271,7 @@ mod tests {
             system_prompt: "You are a helpful assistant. When asked for multiple pieces of info, call multiple tools at once using a JSON array.".into(),
             template: "gemma4".into(),
             max_tokens: 4096, max_iterations: 8, max_retries: 2, temperature: 0.1,
-            parallel_tools: true,
+            parallel_tools: true, stream_tokens: false,
         };
         let cache_cfg = edgeloop::config::CacheConfig { max_context: 4096, truncation_threshold: 0.8 };
         let backend_cfg = backend_config_thinking("ollama", "http://localhost:11434", "gemma4:26b");
@@ -280,7 +280,7 @@ mod tests {
         let uptime_tool = make_tool("get_uptime", "uptime -p", vec![]);
         let agent = edgeloop::agent::Agent::new(backend, vec![date_tool, uptime_tool], &agent_cfg, &cache_cfg);
 
-        let response = agent.run("What is today's date and the system uptime? Use both tools.", &[]).await;
+        let response = agent.run("What is today's date and the system uptime? Use both tools.", &[], None, "test").await;
         println!("[ollama gemma4 parallel] {}", response);
         assert!(!response.is_empty(), "Response should not be empty");
         let history_len = agent.history_len().await;

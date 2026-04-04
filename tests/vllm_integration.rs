@@ -45,7 +45,7 @@ mod vllm_integration {
             max_iterations: 8,
             max_retries: 2,
             temperature: 0.1,
-            parallel_tools: false,
+            parallel_tools: false, stream_tokens: false,
         };
         let cache = edgeloop::config::CacheConfig {
             max_context: 4096,
@@ -80,7 +80,7 @@ mod vllm_integration {
         let backend = Arc::new(edgeloop::backend::vllm::VllmBackend::new(&backend_cfg, &[]));
         let agent = edgeloop::agent::Agent::new(backend, vec![], &agent_cfg, &cache_cfg);
 
-        let response = agent.run("What is 2+2? Answer with just the number.", &[]).await;
+        let response = agent.run("What is 2+2? Answer with just the number.", &[], None, "test").await;
         assert!(response.contains("4"), "Expected '4' in response: {}", response);
     }
 
@@ -97,7 +97,7 @@ mod vllm_integration {
         let backend = Arc::new(edgeloop::backend::vllm::VllmBackend::new(&backend_cfg, &tools));
         let agent = edgeloop::agent::Agent::new(backend, tools, &agent_cfg, &cache_cfg);
 
-        let response = agent.run("What is 123 * 456? Use the calculator tool.", &[]).await;
+        let response = agent.run("What is 123 * 456? Use the calculator tool.", &[], None, "test").await;
         let clean = response.replace(",", "").replace(" ", "");
         assert!(clean.contains("56088"), "Expected '56088' in response: {}", response);
     }
@@ -115,9 +115,9 @@ mod vllm_integration {
         let agent = edgeloop::agent::Agent::new(backend, vec![], &agent_cfg, &cache_cfg);
 
         // First request primes the cache
-        let _ = agent.run("Say hello.", &[]).await;
+        let _ = agent.run("Say hello.", &[], None, "test").await;
         // Second request should hit prefix cache (same system prompt)
-        let _ = agent.run("Say goodbye.", &[]).await;
+        let _ = agent.run("Say goodbye.", &[], None, "test").await;
 
         let cache = agent.cache.lock().await;
         println!("Cache hit ratio: {:.1}%", cache.overall_cache_hit_ratio() * 100.0);

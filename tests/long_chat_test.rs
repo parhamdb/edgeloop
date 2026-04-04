@@ -23,7 +23,7 @@ mod long_chat {
             max_iterations: 8,
             max_retries: 2,
             temperature: 0.1,
-            parallel_tools: false,
+            parallel_tools: false, stream_tokens: false,
         };
         let cache_cfg = edgeloop::config::CacheConfig { max_context: max_tokens, truncation_threshold: 0.8 };
         let backend = Arc::new(edgeloop::backend::ollama::OllamaBackend::new(&backend_cfg));
@@ -63,7 +63,7 @@ mod long_chat {
         let mut total_time = std::time::Duration::ZERO;
         for (i, q) in questions.iter().enumerate() {
             let start = Instant::now();
-            let response = agent.run(q, &[]).await;
+            let response = agent.run(q, &[], None, "test").await;
             let elapsed = start.elapsed();
             total_time += elapsed;
             println!("Turn {}: {}ms — Q: {} A: {}", i + 1, elapsed.as_millis(), q, &response[..response.len().min(80)]);
@@ -87,7 +87,7 @@ mod long_chat {
 
         for (expr, expected) in calculations {
             let start = Instant::now();
-            let response = agent.run(&format!("Calculate {} using the calculator tool.", expr), &[]).await;
+            let response = agent.run(&format!("Calculate {} using the calculator tool.", expr), &[], None, "test").await;
             let elapsed = start.elapsed();
             let clean = response.replace(",", "");
             println!("Calc {}: {}ms — expected={} got={}", expr, elapsed.as_millis(), expected, &response[..response.len().min(80)]);
@@ -102,7 +102,7 @@ mod long_chat {
         let agent = make_agent(vec![], 1024);
 
         for i in 0..5 {
-            let response = agent.run(&format!("Tell me fact #{} about the ocean. Keep it to one sentence.", i + 1), &[]).await;
+            let response = agent.run(&format!("Tell me fact #{} about the ocean. Keep it to one sentence.", i + 1), &[], None, "test").await;
             println!("Turn {} (1024 ctx): {}", i + 1, &response[..response.len().min(100)]);
             assert!(!response.is_empty());
             assert!(!response.starts_with("Error"));
@@ -117,20 +117,20 @@ mod long_chat {
     async fn test_mixed_tool_and_chat() {
         let agent = make_agent(vec![make_calculator()], 4096);
 
-        let r1 = agent.run("What is the capital of Germany?", &[]).await;
+        let r1 = agent.run("What is the capital of Germany?", &[], None, "test").await;
         println!("Chat: {}", &r1[..r1.len().min(60)]);
         assert!(r1.to_lowercase().contains("berlin"));
 
-        let r2 = agent.run("Calculate 50 * 50 using the calculator.", &[]).await;
+        let r2 = agent.run("Calculate 50 * 50 using the calculator.", &[], None, "test").await;
         let clean = r2.replace(",", "");
         println!("Tool: {}", &r2[..r2.len().min(60)]);
         assert!(clean.contains("2500"));
 
-        let r3 = agent.run("What continent is Germany on?", &[]).await;
+        let r3 = agent.run("What continent is Germany on?", &[], None, "test").await;
         println!("Chat: {}", &r3[..r3.len().min(60)]);
         assert!(r3.to_lowercase().contains("europ"));
 
-        let r4 = agent.run("Calculate 2500 + 100 using the calculator.", &[]).await;
+        let r4 = agent.run("Calculate 2500 + 100 using the calculator.", &[], None, "test").await;
         let clean = r4.replace(",", "");
         println!("Tool: {}", &r4[..r4.len().min(60)]);
         assert!(clean.contains("2600"));

@@ -18,7 +18,7 @@ mod bench {
         let agent_cfg = edgeloop::config::AgentConfig {
             system_prompt: "You are helpful.".into(),
             template: "chatml".into(),
-            max_tokens: 4096, max_iterations: 8, max_retries: 2, temperature: 0.1, parallel_tools: false,
+            max_tokens: 4096, max_iterations: 8, max_retries: 2, temperature: 0.1, parallel_tools: false, stream_tokens: false,
         };
         let cache_cfg = edgeloop::config::CacheConfig { max_context: 4096, truncation_threshold: 0.8 };
         let backend = Arc::new(edgeloop::backend::ollama::OllamaBackend::new(&backend_cfg));
@@ -47,7 +47,7 @@ mod bench {
             let mut times = Vec::new();
             for _ in 0..3 {
                 let start = Instant::now();
-                let _ = agent.run("Say hello.", &[]).await;
+                let _ = agent.run("Say hello.", &[], None, "test").await;
                 times.push(start.elapsed());
             }
             let avg_ms = times.iter().map(|t| t.as_millis()).sum::<u128>() / times.len() as u128;
@@ -63,7 +63,7 @@ mod bench {
         for model in models {
             let agent = make_agent(model, vec![make_calculator()]);
             let start = Instant::now();
-            let response = agent.run("What is 15+27? Use the calculator.", &[]).await;
+            let response = agent.run("What is 15+27? Use the calculator.", &[], None, "test").await;
             let elapsed = start.elapsed();
             let correct = response.contains("42");
             println!("  {:<25} {}ms correct={} resp={}", model, elapsed.as_millis(), correct, &response[..response.len().min(60)]);
@@ -79,7 +79,7 @@ mod bench {
             let a = 10 + i * 7;
             let b = 20 + i * 3;
             let start = Instant::now();
-            let response = agent.run(&format!("Calculate {}+{} using calculator.", a, b), &[]).await;
+            let response = agent.run(&format!("Calculate {}+{} using calculator.", a, b), &[], None, "test").await;
             let elapsed = start.elapsed();
             let expected = (a + b).to_string();
             times.push(elapsed);

@@ -19,6 +19,7 @@ mod ollama_integration {
             max_retries: 2,
             temperature: 0.1,
             parallel_tools: false,
+            stream_tokens: false,
         };
         let cache = edgeloop::config::CacheConfig {
             max_context: 4096,
@@ -66,7 +67,7 @@ mod ollama_integration {
         let backend = Arc::new(edgeloop::backend::ollama::OllamaBackend::new(&backend_cfg));
         let agent = edgeloop::agent::Agent::new(backend, vec![], &agent_cfg, &cache_cfg);
 
-        let response = agent.run("What is 2+2? Answer with just the number.", &[]).await;
+        let response = agent.run("What is 2+2? Answer with just the number.", &[], None, "test").await;
         assert!(response.contains("4"), "Expected '4' in response: {}", response);
     }
 
@@ -77,7 +78,7 @@ mod ollama_integration {
         let calculator = make_tool("calculator", "python3 -c 'print(eval(\"{expression}\"))'", vec![("expression", "string", true)]);
         let agent = edgeloop::agent::Agent::new(backend, vec![calculator], &agent_cfg, &cache_cfg);
 
-        let response = agent.run("What is 123 * 456? Use the calculator tool.", &[]).await;
+        let response = agent.run("What is 123 * 456? Use the calculator tool.", &[], None, "test").await;
         let clean = response.replace(",", "").replace(" ", "");
         assert!(clean.contains("56088"), "Expected '56088' in response: {}", response);
     }
@@ -89,7 +90,7 @@ mod ollama_integration {
         let read_file = make_tool("read_file", "cat {path}", vec![("path", "string", true)]);
         let agent = edgeloop::agent::Agent::new(backend, vec![read_file], &agent_cfg, &cache_cfg);
 
-        let response = agent.run("Read the file Cargo.toml and tell me the package name.", &[]).await;
+        let response = agent.run("Read the file Cargo.toml and tell me the package name.", &[], None, "test").await;
         assert!(response.contains("edgeloop"), "Expected 'edgeloop' in response: {}", response);
     }
 
@@ -100,7 +101,7 @@ mod ollama_integration {
         let calculator = make_tool("calculator", "python3 -c 'print(eval(\"{expression}\"))'", vec![("expression", "string", true)]);
         let agent = edgeloop::agent::Agent::new(backend, vec![calculator], &agent_cfg, &cache_cfg);
 
-        let response = agent.run("What is the capital of Japan?", &[]).await;
+        let response = agent.run("What is the capital of Japan?", &[], None, "test").await;
         assert!(response.to_lowercase().contains("tokyo"), "Expected 'tokyo' in response: {}", response);
     }
 
@@ -111,11 +112,11 @@ mod ollama_integration {
         let agent = edgeloop::agent::Agent::new(backend, vec![], &agent_cfg, &cache_cfg);
 
         let start = std::time::Instant::now();
-        let _ = agent.run("Say hello.", &[]).await;
+        let _ = agent.run("Say hello.", &[], None, "test").await;
         let first = start.elapsed();
 
         let start = std::time::Instant::now();
-        let _ = agent.run("Say goodbye.", &[]).await;
+        let _ = agent.run("Say goodbye.", &[], None, "test").await;
         let second = start.elapsed();
 
         println!("First: {:?}, Second: {:?}", first, second);
