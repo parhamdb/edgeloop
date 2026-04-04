@@ -5,7 +5,7 @@ Rust binary — minimal agentic framework for local LLMs. Config-driven, tools a
 ## Project structure
 
 ```
-src/                                    # ~1,500 lines Rust
+src/                                    # ~1,700 lines Rust
 ├── main.rs                             # clap CLI, config load, wire agent + transports
 ├── lib.rs                              # Public module exports for integration tests
 ├── config.rs                           # TOML structs, ${VAR:-default} env expansion, includes, tool loading
@@ -13,13 +13,14 @@ src/                                    # ~1,500 lines Rust
 ├── repair.rs                           # JSON extract/fix, Levenshtein fuzzy match, positional arg mapping
 ├── tool.rs                             # sh -c subprocess executor, {arg} substitution, timeout
 ├── cache.rs                            # CacheStats + CacheManager — prefill tracking, truncation at 80%
-├── message.rs                          # Message, OutputEvent (tagged enum), IncomingRequest
+├── message.rs                          # Message, ImageAttachment, OutputEvent, IncomingRequest
 ├── backend/
 │   ├── mod.rs                          # Backend trait (stream_completion + token_count + last_cache_stats)
-│   ├── ollama.rs                       # /api/chat NDJSON streaming, thinking mode, KV cache stats
+│   ├── openai_compat.rs               # Shared wire types for OpenAI-compatible APIs (multimodal)
+│   ├── ollama.rs                       # /api/chat NDJSON streaming, thinking mode, native images
 │   ├── llama_server.rs                 # /completion SSE, cache_prompt + id_slot, /tokenize
-│   ├── openai.rs                       # /v1/chat/completions SSE, works with any compatible API
-│   └── vllm.rs                         # vLLM backend: guided decoding, prefix cache stats, /tokenize
+│   ├── openai.rs                       # /v1/chat/completions SSE, multimodal content-array
+│   └── vllm.rs                         # vLLM backend: guided decoding, prefix cache stats, multimodal
 └── transport/
     ├── mod.rs                          # Transport trait (serve + name), factory
     ├── cli.rs                          # stdin/stdout REPL
@@ -49,7 +50,7 @@ examples/                               # Example configs
 cargo build                             # debug, default features
 cargo build --release --features full   # all backends + transports (5.0MB)
 cargo build --release                   # default: ollama + llama-server + cli (4.4MB)
-cargo test --bin edgeloop               # 57 unit tests
+cargo test --bin edgeloop               # 71 unit tests
 cargo test --test integration_test      # 5 integration tests (needs Ollama)
 cargo test --test benchmark -- --nocapture  # performance benchmarks
 ```
@@ -66,6 +67,7 @@ Transports: cli-transport, websocket, mqtt, unix-socket, tcp-socket
 - Backend trait: `stream_completion()` returns `BoxStream<Result<String>>`, `token_count()`, `last_cache_stats()`.
 - Transport trait: `serve(handler)` — handler is `Arc<dyn Fn(TransportRequest)>`.
 - Non-CLI transports use JSON protocol: `{"message":"...","session":"..."}` → `{"type":"done","content":"...","session":"..."}`.
+- Multimodal images: incoming requests can include `"images": [{"b64":"...","description":"...","mime_type":"image/jpeg"}]`. Images flow transport → agent → backend. OpenAI/vLLM use content-array format (`image_url` parts), Ollama uses native `images` field, llama-server degrades to text descriptions. Shared wire types in `backend/openai_compat.rs`.
 - Repair pipeline: `repair_tool_calls()` handles single `{...}` and array `[{...}, ...]`; delegates to `parse_single_tool_call()`. Fuzzy match via Levenshtein, positional arg coercion. Legacy `repair_tool_call()` returns the first result.
 - Agent loop: build prompt → stream backend → repair → tool(s) or return. Append-only history.
 - Parallel tool calls: opt-in via `parallel_tools = true` in `[agent]`. LLM emits a JSON array; tools execute concurrently via `tokio::task::JoinSet`; all results are batched into one user message. Recommended for 7B+ models. Default is false.

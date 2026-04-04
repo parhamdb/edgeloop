@@ -71,7 +71,8 @@ Parameters are substituted into the command template. stdout is returned to the 
 |---------|--------------|-------------------|
 | **Ollama** | `ollama` | Local/remote Ollama server |
 | **llama-server** | `llama-server` | llama.cpp HTTP server with KV cache slot pinning |
-| **OpenAI** | `openai` | OpenAI, Together, Groq, OpenRouter, vLLM, any compatible API |
+| **vLLM** | `vllm` | vLLM server with guided decoding and prefix caching |
+| **OpenAI** | `openai` | OpenAI, Together, Groq, OpenRouter, any compatible API |
 
 ```toml
 # Remote Ollama
@@ -114,6 +115,15 @@ JSON protocol (WebSocket/MQTT/sockets):
 → {"message": "What is 2+2?", "session": "abc"}
 ← {"type": "done", "content": "4", "session": "abc"}
 ```
+
+Multimodal messages (images):
+```json
+→ {"message": "What do you see?", "session": "abc", "images": [
+    {"b64": "/9j/4AAQ...", "description": "Photo from camera", "mime_type": "image/jpeg"}
+  ]}
+```
+
+Images are supported by Ollama, OpenAI, and vLLM backends. The `description` and `mime_type` fields are optional (defaults to no description and `image/jpeg`). The llama-server backend includes image descriptions as text context.
 
 ## Feature Flags
 
@@ -161,12 +171,14 @@ src/
 ├── repair.rs            # JSON repair, fuzzy match, type coercion
 ├── tool.rs              # Subprocess executor, arg substitution, timeout
 ├── cache.rs             # KV cache tracking, context budget
-├── message.rs           # Message + OutputEvent types
+├── message.rs           # Message, ImageAttachment, OutputEvent types
 ├── backend/
 │   ├── mod.rs           # Backend trait
-│   ├── ollama.rs        # /api/chat NDJSON streaming
+│   ├── openai_compat.rs # Shared multimodal wire types
+│   ├── ollama.rs        # /api/chat NDJSON streaming, native images
 │   ├── llama_server.rs  # /completion SSE streaming + slot pinning
-│   └── openai.rs        # /v1/chat/completions SSE streaming
+│   ├── openai.rs        # /v1/chat/completions SSE, multimodal
+│   └── vllm.rs          # vLLM: guided decoding, prefix cache, multimodal
 └── transport/
     ├── mod.rs           # Transport trait
     ├── cli.rs           # stdin/stdout REPL
@@ -193,7 +205,7 @@ All targets: fully static musl binaries.
 
 ```bash
 cargo build                          # debug build
-cargo test --bin edgeloop            # unit tests (45)
+cargo test --bin edgeloop            # unit tests (71)
 cargo test --test integration_test   # integration tests (5, needs Ollama)
 cargo test --test benchmark -- --nocapture  # benchmarks (needs Ollama)
 cargo build --release --features full       # release binary
