@@ -29,6 +29,7 @@ system_prompt = "You are a helpful assistant."
 template = "chatml"          # chatml | llama3 | mistral
 max_tokens = 4096
 temperature = 0.7
+stream_tokens = true         # stream tokens to transport as they arrive (for TTS)
 
 [backend]
 type = "ollama"              # ollama | llama-server | openai
@@ -127,6 +128,31 @@ Multimodal messages (images — inline, file path, or URL):
 
 Each image needs one of `b64`, `path`, or `url`. Edgeloop resolves file/URL references at request time (reads file or HTTP GET, base64 encodes). Optional fields: `description`, `mime_type` (inferred from extension/content-type if omitted, defaults to `image/jpeg`). Supported by Ollama, OpenAI, and vLLM backends. The llama-server backend includes image descriptions as text context.
 
+## Token Streaming
+
+Enable `stream_tokens = true` in `[agent]` to stream tokens as they arrive from the LLM backend. Useful for TTS or real-time UI updates.
+
+```toml
+[agent]
+stream_tokens = true
+```
+
+With streaming enabled, transports emit progressive events before the final `done`:
+```json
+← {"type": "token", "content": "I saw", "session": "abc"}
+← {"type": "token", "content": " your mug", "session": "abc"}
+← {"type": "token", "content": " near the chair.", "session": "abc"}
+← {"type": "done", "content": "I saw your mug near the chair.", "session": "abc"}
+```
+
+During tool execution, `tool_call` and `tool_result` events are also streamed:
+```json
+← {"type": "tool_call", "tool": "find_object", "arguments": {"name": "mug"}, "session": "abc"}
+← {"type": "tool_result", "tool": "find_object", "result": "near the chair", "session": "abc"}
+```
+
+Token events use non-blocking `try_send` — if a transport consumer is slow, tokens are dropped rather than blocking the LLM stream. The `done` event always contains the complete response.
+
 ## Feature Flags
 
 Compile only what you need:
@@ -169,7 +195,7 @@ WebSocket roundtrip: 117ms end-to-end.
 src/
 ├── main.rs              # CLI entry, config → agent → transports
 ├── config.rs            # TOML parsing, env vars, includes, tool packages
-├── agent.rs             # ReAct loop, 3 chat templates, history truncation
+├── agent.rs             # ReAct loop, token streaming, chat templates, history truncation
 ├── repair.rs            # JSON repair, fuzzy match, type coercion
 ├── tool.rs              # Subprocess executor, arg substitution, timeout
 ├── cache.rs             # KV cache tracking, context budget
@@ -207,7 +233,7 @@ All targets: fully static musl binaries.
 
 ```bash
 cargo build                          # debug build
-cargo test --bin edgeloop            # unit tests (79)
+cargo test --bin edgeloop            # unit tests (82)
 cargo test --test integration_test   # integration tests (5, needs Ollama)
 cargo test --test benchmark -- --nocapture  # benchmarks (needs Ollama)
 cargo build --release --features full       # release binary

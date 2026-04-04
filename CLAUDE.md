@@ -9,7 +9,7 @@ src/                                    # ~1,700 lines Rust
 ├── main.rs                             # clap CLI, config load, wire agent + transports
 ├── lib.rs                              # Public module exports for integration tests
 ├── config.rs                           # TOML structs, ${VAR:-default} env expansion, includes, tool loading
-├── agent.rs                            # ReAct loop, parallel tool calls, 4 chat templates, truncation
+├── agent.rs                            # ReAct loop, parallel tool calls, token streaming, 4 chat templates, truncation
 ├── repair.rs                           # JSON extract/fix, Levenshtein fuzzy match, positional arg mapping
 ├── tool.rs                             # sh -c subprocess executor, {arg} substitution, timeout
 ├── cache.rs                            # CacheStats + CacheManager — prefill tracking, truncation at 80%
@@ -50,7 +50,7 @@ examples/                               # Example configs
 cargo build                             # debug, default features
 cargo build --release --features full   # all backends + transports (5.0MB)
 cargo build --release                   # default: ollama + llama-server + cli (4.4MB)
-cargo test --bin edgeloop               # 79 unit tests
+cargo test --bin edgeloop               # 82 unit tests
 cargo test --test integration_test      # 5 integration tests (needs Ollama)
 cargo test --test benchmark -- --nocapture  # performance benchmarks
 ```
@@ -72,6 +72,7 @@ Transports: cli-transport, websocket, mqtt, unix-socket, tcp-socket
 - Repair pipeline: `repair_tool_calls()` handles single `{...}` and array `[{...}, ...]`; delegates to `parse_single_tool_call()`. Fuzzy match via Levenshtein, positional arg coercion. Legacy `repair_tool_call()` returns the first result.
 - Agent loop: build prompt → stream backend → repair → tool(s) or return. Append-only history.
 - Parallel tool calls: opt-in via `parallel_tools = true` in `[agent]`. LLM emits a JSON array; tools execute concurrently via `tokio::task::JoinSet`; all results are batched into one user message. Recommended for 7B+ models. Default is false.
+- Token streaming: opt-in via `stream_tokens = true` in `[agent]`. Emits `OutputEvent::Token` events as tokens arrive from the backend, plus `ToolCall`/`ToolResult` events during tool execution. Enables real-time text streaming for TTS consumers. Uses `try_send` (non-blocking) to avoid backpressure. Default is false.
 - All backends use `reqwest` with `rustls-tls` — no OpenSSL, clean static linking.
 
 ## Performance (RTX 4070, Ollama)
