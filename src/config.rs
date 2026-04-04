@@ -181,6 +181,9 @@ pub struct MqttTransportConfig {
     pub client_id: String,
     #[serde(default = "default_mqtt_qos")]
     pub qos: u8,
+    /// Max MQTT packet size in bytes. Default: rumqttc default (10KB).
+    /// Set higher for multimodal payloads with base64 images.
+    pub max_packet_size: Option<usize>,
 }
 
 #[derive(Debug, Deserialize, Clone)]

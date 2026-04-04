@@ -39,6 +39,10 @@ impl Transport for MqttTransport {
         let mut opts = MqttOptions::new(&self.config.client_id, host, port);
         opts.set_keep_alive(Duration::from_secs(30));
         opts.set_clean_session(true);
+        if let Some(max_size) = self.config.max_packet_size {
+            opts.set_max_packet_size(max_size, max_size);
+            tracing::info!("MQTT max packet size set to {} bytes", max_size);
+        }
 
         let (client, mut eventloop) = AsyncClient::new(opts, 64);
         let qos = qos_from_u8(self.config.qos);
