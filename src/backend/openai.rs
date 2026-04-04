@@ -55,7 +55,7 @@ impl OpenAIBackend {
 #[derive(Serialize)]
 struct ChatRequest {
     model: String,
-    messages: Vec<Message>,
+    messages: Vec<ApiMessage>,
     stream: bool,
     temperature: f64,
     max_tokens: usize,
@@ -67,6 +67,67 @@ struct ChatRequest {
 #[derive(Serialize)]
 struct StreamOptions {
     include_usage: bool,
+}
+
+// --- Wire types for OpenAI-compatible API ---
+
+#[derive(Serialize)]
+struct ApiMessage {
+    role: String,
+    content: ApiContent,
+}
+
+#[derive(Serialize)]
+#[serde(untagged)]
+enum ApiContent {
+    Text(String),
+    Parts(Vec<ContentPart>),
+}
+
+#[derive(Serialize)]
+#[serde(tag = "type")]
+enum ContentPart {
+    #[serde(rename = "text")]
+    Text { text: String },
+    #[serde(rename = "image_url")]
+    ImageUrl { image_url: ImageUrl },
+}
+
+#[derive(Serialize)]
+struct ImageUrl {
+    url: String,
+}
+
+impl ApiMessage {
+    fn from_message(msg: &Message) -> Self {
+        if msg.images.is_empty() {
+            return Self {
+                role: msg.role.clone(),
+                content: ApiContent::Text(msg.content.clone()),
+            };
+        }
+
+        let mut parts = Vec::new();
+
+        // Prepend image descriptions + images before main text
+        for img in &msg.images {
+            if let Some(desc) = &img.description {
+                parts.push(ContentPart::Text { text: desc.clone() });
+            }
+            parts.push(ContentPart::ImageUrl {
+                image_url: ImageUrl {
+                    url: format!("data:image/jpeg;base64,{}", img.b64),
+                },
+            });
+        }
+
+        parts.push(ContentPart::Text { text: msg.content.clone() });
+
+        Self {
+            role: msg.role.clone(),
+            content: ApiContent::Parts(parts),
+        }
+    }
 }
 
 #[derive(Deserialize, Debug)]
@@ -106,7 +167,7 @@ impl Backend for OpenAIBackend {
         let url = format!("{}/chat/completions", self.endpoint);
         let body = ChatRequest {
             model: self.model.clone(),
-            messages: messages.to_vec(),
+            messages: messages.iter().map(ApiMessage::from_message).collect(),
             stream: true,
             temperature,
             max_tokens,
@@ -336,5 +397,59 @@ impl futures::Stream for TokenStreamWithStats {
             }
             Poll::Pending => Poll::Pending,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::message::ImageAttachment;
+
+    #[test]
+    fn test_api_message_text_only() {
+        let msg = Message::user("hello");
+        let api_msg = ApiMessage::from_message(&msg);
+        assert_eq!(api_msg.role, "user");
+        match &api_msg.content {
+            ApiContent::Text(s) => assert_eq!(s, "hello"),
+            ApiContent::Parts(_) => panic!("Expected text, got parts"),
+        }
+    }
+
+    #[test]
+    fn test_api_message_with_images() {
+        let msg = Message::user_with_images("look at this", vec![
+            ImageAttachment { b64: "abc123".into(), description: Some("a photo".into()) },
+        ]);
+        let api_msg = ApiMessage::from_message(&msg);
+        match &api_msg.content {
+            ApiContent::Parts(parts) => {
+                assert_eq!(parts.len(), 3); // desc text + image + main text
+            }
+            ApiContent::Text(_) => panic!("Expected parts, got text"),
+        }
+    }
+
+    #[test]
+    fn test_api_message_serializes_text_as_string() {
+        let msg = Message::user("hello");
+        let api_msg = ApiMessage::from_message(&msg);
+        let json = serde_json::to_value(&api_msg).unwrap();
+        assert_eq!(json["content"], "hello");
+    }
+
+    #[test]
+    fn test_api_message_serializes_images_as_array() {
+        let msg = Message::user_with_images("look", vec![
+            ImageAttachment { b64: "abc".into(), description: None },
+        ]);
+        let api_msg = ApiMessage::from_message(&msg);
+        let json = serde_json::to_value(&api_msg).unwrap();
+        let content = &json["content"];
+        assert!(content.is_array(), "Expected array, got: {}", content);
+        assert_eq!(content.as_array().unwrap().len(), 2); // image + main text
+        assert_eq!(content[0]["type"], "image_url");
+        assert_eq!(content[1]["type"], "text");
+        assert!(content[0]["image_url"]["url"].as_str().unwrap().starts_with("data:image/jpeg;base64,"));
     }
 }
