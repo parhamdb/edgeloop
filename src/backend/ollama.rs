@@ -55,6 +55,37 @@ struct ChatRequest {
 struct ChatMsg {
     role: String,
     content: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    images: Option<Vec<String>>,
+}
+
+impl ChatMsg {
+    fn from_message(msg: &Message) -> Self {
+        if msg.images.is_empty() {
+            return Self {
+                role: msg.role.clone(),
+                content: msg.content.clone(),
+                images: None,
+            };
+        }
+
+        // Prepend image descriptions to content
+        let mut content_parts = Vec::new();
+        let mut b64_images = Vec::new();
+        for img in &msg.images {
+            if let Some(desc) = &img.description {
+                content_parts.push(desc.clone());
+            }
+            b64_images.push(img.b64.clone());
+        }
+        content_parts.push(msg.content.clone());
+
+        Self {
+            role: msg.role.clone(),
+            content: content_parts.join("\n"),
+            images: Some(b64_images),
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -97,10 +128,7 @@ impl Backend for OllamaBackend {
         let url = format!("{}/api/chat", self.endpoint);
         let body = ChatRequest {
             model: self.model.clone(),
-            messages: messages.iter().map(|m| ChatMsg {
-                role: m.role.clone(),
-                content: m.content.clone(),
-            }).collect(),
+            messages: messages.iter().map(ChatMsg::from_message).collect(),
             stream: true,
             think: self.thinking,
             options: ChatOptions { num_predict: max_tokens, temperature, num_ctx: self.num_ctx, seed: self.seed },
@@ -247,5 +275,32 @@ mod tests {
         assert!(chunk.done);
         assert_eq!(chunk.prompt_eval_count, Some(42));
         assert_eq!(chunk.eval_duration, Some(3000000));
+    }
+
+    #[test]
+    fn test_chat_msg_with_images() {
+        let msg = crate::message::Message::user_with_images("look", vec![
+            crate::message::ImageAttachment { b64: "abc123".into(), description: Some("photo".into()) },
+        ]);
+        let chat_msg = ChatMsg::from_message(&msg);
+        assert_eq!(chat_msg.content, "photo\nlook");
+        assert_eq!(chat_msg.images.as_ref().unwrap().len(), 1);
+        assert_eq!(chat_msg.images.as_ref().unwrap()[0], "abc123");
+    }
+
+    #[test]
+    fn test_chat_msg_without_images() {
+        let msg = crate::message::Message::user("hello");
+        let chat_msg = ChatMsg::from_message(&msg);
+        assert_eq!(chat_msg.content, "hello");
+        assert!(chat_msg.images.is_none());
+    }
+
+    #[test]
+    fn test_chat_msg_images_omitted_in_json() {
+        let msg = crate::message::Message::user("hello");
+        let chat_msg = ChatMsg::from_message(&msg);
+        let json = serde_json::to_string(&chat_msg).unwrap();
+        assert!(!json.contains("images"), "Should omit empty images: {}", json);
     }
 }
