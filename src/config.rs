@@ -37,6 +37,11 @@ pub struct AgentConfig {
     /// Default false — opt in for capable models (7B+).
     #[serde(default)]
     pub parallel_tools: bool,
+    /// Stream tokens to transport as they arrive from the backend.
+    /// Enables real-time text streaming for TTS consumers.
+    /// Default false — opt in when transport consumers need progressive output.
+    #[serde(default)]
+    pub stream_tokens: bool,
 }
 
 #[derive(Debug, Deserialize, Clone)]

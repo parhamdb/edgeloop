@@ -67,7 +67,7 @@ async fn main() -> anyhow::Result<()> {
     let handler: transport::RequestHandler = Arc::new(move |req: transport::TransportRequest| {
         let agent = agent_clone.clone();
         tokio::spawn(async move {
-            let result = agent.run(&req.message, &req.images).await;
+            let result = agent.run(&req.message, &req.images, Some(&req.response_tx), &req.session).await;
             let _ = req.response_tx.send(message::OutputEvent::Done {
                 content: result,
                 session: req.session,

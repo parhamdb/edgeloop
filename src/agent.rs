@@ -62,6 +62,7 @@ pub struct Agent {
     max_retries: usize,
     temperature: f64,
     parallel_tools: bool,
+    stream_tokens: bool,
     pub cache: Mutex<CacheManager>,
     /// Persistent conversation history across run() calls.
     /// Each run appends user + assistant messages, maximizing KV cache reuse.
@@ -80,6 +81,7 @@ impl Agent {
             max_retries: agent_config.max_retries,
             temperature: agent_config.temperature,
             parallel_tools: agent_config.parallel_tools,
+            stream_tokens: agent_config.stream_tokens,
             cache: Mutex::new(cache),
             conversation: Mutex::new(Vec::new()),
         }
@@ -87,7 +89,7 @@ impl Agent {
 
     /// Run the agent loop. Conversation history persists across calls
     /// so the LLM backend can reuse its KV cache for the shared prefix.
-    pub async fn run(&self, message: &str, images: &[crate::message::ImageAttachment]) -> String {
+    pub async fn run(&self, message: &str, images: &[crate::message::ImageAttachment], response_tx: Option<&tokio::sync::mpsc::Sender<crate::message::OutputEvent>>, session: &str) -> String {
         // Append user message to persistent conversation
         self.conversation.lock().await.push(
             Message::user_with_images(message, images.to_vec())
@@ -128,7 +130,17 @@ impl Agent {
             let mut stream = self.backend.stream_completion(&prompt, &messages, self.temperature, max_tokens, &stop);
             while let Some(result) = stream.next().await {
                 match result {
-                    Ok(token) => response_text.push_str(&token),
+                    Ok(token) => {
+                        if self.stream_tokens {
+                            if let Some(tx) = response_tx {
+                                let _ = tx.try_send(crate::message::OutputEvent::Token {
+                                    content: token.clone(),
+                                    session: session.to_string(),
+                                });
+                            }
+                        }
+                        response_text.push_str(&token);
+                    }
                     Err(e) => { warn!("Backend error: {}", e); return format!("Error: Backend failed: {}", e); }
                 }
             }
@@ -167,6 +179,16 @@ impl Agent {
                 let tc = &tool_calls[0];
                 info!("Executing tool: {}({:?})", tc.name, tc.arguments);
 
+                if self.stream_tokens {
+                    if let Some(tx) = response_tx {
+                        let _ = tx.try_send(crate::message::OutputEvent::ToolCall {
+                            tool: tc.name.clone(),
+                            arguments: serde_json::to_value(&tc.arguments).unwrap_or_default(),
+                            session: session.to_string(),
+                        });
+                    }
+                }
+
                 let tool_def = match self.tools.iter().find(|t| t.name == tc.name) {
                     Some(t) => t,
                     None => return format!("Error: Tool '{}' not found", tc.name),
@@ -175,12 +197,34 @@ impl Agent {
                 let result = tool::execute_tool(tool_def, &tc.arguments).await;
                 info!("Tool result: {}", &result[..result.len().min(100)]);
 
+                if self.stream_tokens {
+                    if let Some(tx) = response_tx {
+                        let _ = tx.try_send(crate::message::OutputEvent::ToolResult {
+                            tool: tc.name.clone(),
+                            result: result.clone(),
+                            session: session.to_string(),
+                        });
+                    }
+                }
+
                 let mut conv = self.conversation.lock().await;
                 conv.push(Message::assistant(&response_text));
                 conv.push(Message::user(&format!("Tool '{}' returned:\n{}", tc.name, result)));
             } else {
                 // Multiple tool calls — execute in parallel
                 info!("Executing {} tools in parallel", tool_calls.len());
+
+                if self.stream_tokens {
+                    for tc in &tool_calls {
+                        if let Some(tx) = response_tx {
+                            let _ = tx.try_send(crate::message::OutputEvent::ToolCall {
+                                tool: tc.name.clone(),
+                                arguments: serde_json::to_value(&tc.arguments).unwrap_or_default(),
+                                session: session.to_string(),
+                            });
+                        }
+                    }
+                }
 
                 let mut set = tokio::task::JoinSet::new();
                 for tc in &tool_calls {
@@ -204,6 +248,15 @@ impl Agent {
                     match res {
                         Ok((name, output)) => {
                             info!("Tool '{}' result: {}", name, &output[..output.len().min(100)]);
+                            if self.stream_tokens {
+                                if let Some(tx) = response_tx {
+                                    let _ = tx.try_send(crate::message::OutputEvent::ToolResult {
+                                        tool: name.clone(),
+                                        result: output.clone(),
+                                        session: session.to_string(),
+                                    });
+                                }
+                            }
                             results.push((name, output));
                         }
                         Err(e) => warn!("Tool task panicked: {}", e),
@@ -284,7 +337,7 @@ mod tests {
 
     fn make_agent(responses: Vec<String>, tools: Vec<ToolDef>) -> Agent {
         let backend = Arc::new(MockBackend::new(responses));
-        let agent_config = AgentConfig { system_prompt: "You are helpful.".into(), template: "chatml".into(), max_tokens: 4096, max_iterations: 10, max_retries: 2, temperature: 0.1, parallel_tools: false };
+        let agent_config = AgentConfig { system_prompt: "You are helpful.".into(), template: "chatml".into(), max_tokens: 4096, max_iterations: 10, max_retries: 2, temperature: 0.1, parallel_tools: false, stream_tokens: false };
         let cache_config = CacheConfig { max_context: 4096, truncation_threshold: 0.8 };
         Agent::new(backend, tools, &agent_config, &cache_config)
     }
@@ -292,7 +345,7 @@ mod tests {
     #[tokio::test]
     async fn test_simple_response() {
         let agent = make_agent(vec!["Hello there!".into()], vec![]);
-        assert_eq!(agent.run("Hi", &[]).await, "Hello there!");
+        assert_eq!(agent.run("Hi", &[], None, "test").await, "Hello there!");
     }
 
     #[tokio::test]
@@ -301,7 +354,7 @@ mod tests {
             vec![r#"{"tool": "read_file", "arguments": {"path": "/tmp/test"}}"#.into(), "The file says: contents of /tmp/test".into()],
             vec![make_tool("read_file")],
         );
-        let result = agent.run("Read /tmp/test", &[]).await;
+        let result = agent.run("Read /tmp/test", &[], None, "test").await;
         assert!(result.contains("contents of /tmp/test"));
     }
 
@@ -323,7 +376,7 @@ mod tests {
 
     fn make_parallel_agent(responses: Vec<String>, tools: Vec<ToolDef>) -> Agent {
         let backend = Arc::new(MockBackend::new(responses));
-        let agent_config = AgentConfig { system_prompt: "You are helpful.".into(), template: "chatml".into(), max_tokens: 4096, max_iterations: 10, max_retries: 2, temperature: 0.1, parallel_tools: true };
+        let agent_config = AgentConfig { system_prompt: "You are helpful.".into(), template: "chatml".into(), max_tokens: 4096, max_iterations: 10, max_retries: 2, temperature: 0.1, parallel_tools: true, stream_tokens: false };
         let cache_config = CacheConfig { max_context: 4096, truncation_threshold: 0.8 };
         Agent::new(backend, tools, &agent_config, &cache_config)
     }
@@ -343,7 +396,7 @@ mod tests {
             ],
             vec![make_echo_tool("tool_a"), make_echo_tool("tool_b")],
         );
-        let result = agent.run("Call both tools", &[]).await;
+        let result = agent.run("Call both tools", &[], None, "test").await;
         assert_eq!(result, "Both tools returned results.");
         // Conversation should have: user, assistant (array), user (batch results), assistant (final)
         assert_eq!(agent.history_len().await, 4);
@@ -364,7 +417,7 @@ mod tests {
     #[tokio::test]
     async fn test_prompt_is_gemma4() {
         let backend = Arc::new(MockBackend::new(vec!["ok".into()]));
-        let agent_config = AgentConfig { system_prompt: "You are helpful.".into(), template: "gemma4".into(), max_tokens: 4096, max_iterations: 10, max_retries: 2, temperature: 0.1, parallel_tools: false };
+        let agent_config = AgentConfig { system_prompt: "You are helpful.".into(), template: "gemma4".into(), max_tokens: 4096, max_iterations: 10, max_retries: 2, temperature: 0.1, parallel_tools: false, stream_tokens: false };
         let cache_config = CacheConfig { max_context: 4096, truncation_threshold: 0.8 };
         let agent = Agent::new(backend, vec![], &agent_config, &cache_config);
         let prompt = agent.format_prompt(&[Message::user("hello")]);
@@ -381,7 +434,7 @@ mod tests {
             description: Some("a cat".into()),
             mime_type: None,
         }];
-        let result = agent.run("What do you see?", &images).await;
+        let result = agent.run("What do you see?", &images, None, "test").await;
         assert_eq!(result, "I see a cat!");
         let conv = agent.conversation.lock().await;
         assert_eq!(conv.len(), 2);
@@ -392,7 +445,7 @@ mod tests {
     #[tokio::test]
     async fn test_run_without_images_empty() {
         let agent = make_agent(vec!["Hello!".into()], vec![]);
-        let result = agent.run("Hi", &[]).await;
+        let result = agent.run("Hi", &[], None, "test").await;
         assert_eq!(result, "Hello!");
         let conv = agent.conversation.lock().await;
         assert!(conv[0].images.is_empty());
@@ -423,5 +476,74 @@ mod tests {
         ];
         let prompt = agent.format_prompt(&messages);
         assert!(prompt.contains("[Image attached]"), "Should have placeholder: {}", prompt);
+    }
+
+    fn make_streaming_agent(responses: Vec<String>, tools: Vec<ToolDef>) -> Agent {
+        let backend = Arc::new(MockBackend::new(responses));
+        let agent_config = AgentConfig { system_prompt: "You are helpful.".into(), template: "chatml".into(), max_tokens: 4096, max_iterations: 10, max_retries: 2, temperature: 0.1, parallel_tools: false, stream_tokens: true };
+        let cache_config = CacheConfig { max_context: 4096, truncation_threshold: 0.8 };
+        Agent::new(backend, tools, &agent_config, &cache_config)
+    }
+
+    #[tokio::test]
+    async fn test_stream_tokens_emits_token_events() {
+        let agent = make_streaming_agent(vec!["Hello there!".into()], vec![]);
+        let (tx, mut rx) = tokio::sync::mpsc::channel(64);
+        let result = agent.run("Hi", &[], Some(&tx), "s1").await;
+        drop(tx);
+
+        let mut tokens = Vec::new();
+        while let Ok(event) = rx.try_recv() {
+            if let crate::message::OutputEvent::Token { content, session } = event {
+                assert_eq!(session, "s1");
+                tokens.push(content);
+            }
+        }
+        assert!(!tokens.is_empty(), "Should have received at least one Token event");
+        let concatenated: String = tokens.concat();
+        assert_eq!(concatenated, result);
+    }
+
+    #[tokio::test]
+    async fn test_stream_tokens_false_emits_no_token_events() {
+        let agent = make_agent(vec!["Hello!".into()], vec![]);
+        let (tx, mut rx) = tokio::sync::mpsc::channel(64);
+        let _result = agent.run("Hi", &[], Some(&tx), "s1").await;
+        drop(tx);
+
+        let mut count = 0;
+        while let Ok(_event) = rx.try_recv() {
+            count += 1;
+        }
+        assert_eq!(count, 0, "No events should be emitted when stream_tokens is false");
+    }
+
+    #[tokio::test]
+    async fn test_stream_tokens_emits_tool_call_and_result() {
+        let agent = make_streaming_agent(
+            vec![
+                r#"{"tool": "read_file", "arguments": {"path": "/tmp/test"}}"#.into(),
+                "The file contains: contents of /tmp/test".into(),
+            ],
+            vec![make_tool("read_file")],
+        );
+        let (tx, mut rx) = tokio::sync::mpsc::channel(64);
+        let _result = agent.run("Read /tmp/test", &[], Some(&tx), "s1").await;
+        drop(tx);
+
+        let mut tool_calls = Vec::new();
+        let mut tool_results = Vec::new();
+        let mut tokens = Vec::new();
+        while let Ok(event) = rx.try_recv() {
+            match event {
+                crate::message::OutputEvent::ToolCall { tool, .. } => tool_calls.push(tool),
+                crate::message::OutputEvent::ToolResult { tool, .. } => tool_results.push(tool),
+                crate::message::OutputEvent::Token { content, .. } => tokens.push(content),
+                _ => {}
+            }
+        }
+        assert!(tool_calls.iter().any(|t| t == "read_file"), "Should have ToolCall for read_file");
+        assert!(tool_results.iter().any(|t| t == "read_file"), "Should have ToolResult for read_file");
+        assert!(!tokens.is_empty(), "Should have Token events for final response");
     }
 }
