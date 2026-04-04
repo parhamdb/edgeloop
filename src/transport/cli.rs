@@ -43,6 +43,7 @@ impl Transport for CliTransport {
             handler(TransportRequest {
                 message: trimmed,
                 session: "cli".to_string(),
+                images: vec![],
                 response_tx: tx,
             });
 

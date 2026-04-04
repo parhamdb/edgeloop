@@ -17,6 +17,7 @@ pub mod socket;
 pub struct TransportRequest {
     pub message: String,
     pub session: String,
+    pub images: Vec<crate::message::ImageAttachment>,
     pub response_tx: mpsc::Sender<OutputEvent>,
 }
 

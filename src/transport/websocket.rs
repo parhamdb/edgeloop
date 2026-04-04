@@ -81,6 +81,7 @@ async fn handle_connection(
                 handler(TransportRequest {
                     message: req.message,
                     session: req.session,
+                    images: req.images,
                     response_tx: tx,
                 });
 
