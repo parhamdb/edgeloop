@@ -73,11 +73,12 @@ impl Transport for MqttTransport {
                         }
                     };
 
+                    let images = crate::message::resolve_images(req.images).await;
                     let (tx, mut rx) = mpsc::channel::<OutputEvent>(64);
                     handler(TransportRequest {
                         message: req.message,
                         session: req.session,
-                        images: req.images,
+                        images,
                         response_tx: tx,
                     });
 
