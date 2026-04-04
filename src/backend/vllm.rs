@@ -10,6 +10,7 @@ use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 
 use crate::backend::Backend;
+use crate::backend::openai_compat::ApiMessage;
 use crate::cache::CacheStats;
 use crate::config::{BackendConfig, ToolDef};
 use crate::message::Message;
@@ -181,64 +182,6 @@ struct ChatRequest {
 #[derive(Serialize)]
 struct StreamOptions {
     include_usage: bool,
-}
-
-// --- Wire types for OpenAI-compatible API ---
-
-#[derive(Serialize)]
-struct ApiMessage {
-    role: String,
-    content: ApiContent,
-}
-
-#[derive(Serialize)]
-#[serde(untagged)]
-enum ApiContent {
-    Text(String),
-    Parts(Vec<ContentPart>),
-}
-
-#[derive(Serialize)]
-#[serde(tag = "type")]
-enum ContentPart {
-    #[serde(rename = "text")]
-    Text { text: String },
-    #[serde(rename = "image_url")]
-    ImageUrl { image_url: ImageUrl },
-}
-
-#[derive(Serialize)]
-struct ImageUrl {
-    url: String,
-}
-
-impl ApiMessage {
-    fn from_message(msg: &Message) -> Self {
-        if msg.images.is_empty() {
-            return Self {
-                role: msg.role.clone(),
-                content: ApiContent::Text(msg.content.clone()),
-            };
-        }
-
-        let mut parts = Vec::new();
-        for img in &msg.images {
-            if let Some(desc) = &img.description {
-                parts.push(ContentPart::Text { text: desc.clone() });
-            }
-            parts.push(ContentPart::ImageUrl {
-                image_url: ImageUrl {
-                    url: format!("data:image/jpeg;base64,{}", img.b64),
-                },
-            });
-        }
-        parts.push(ContentPart::Text { text: msg.content.clone() });
-
-        Self {
-            role: msg.role.clone(),
-            content: ApiContent::Parts(parts),
-        }
-    }
 }
 
 #[derive(Deserialize, Debug)]
@@ -750,7 +693,7 @@ mod tests {
     #[test]
     fn test_api_message_with_images() {
         let msg = Message::user_with_images("look", vec![
-            crate::message::ImageAttachment { b64: "abc".into(), description: Some("photo".into()) },
+            crate::message::ImageAttachment { b64: "abc".into(), description: Some("photo".into()), mime_type: None },
         ]);
         let api_msg = ApiMessage::from_message(&msg);
         let json = serde_json::to_value(&api_msg).unwrap();

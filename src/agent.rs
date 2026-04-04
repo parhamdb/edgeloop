@@ -379,6 +379,7 @@ mod tests {
         let images = vec![crate::message::ImageAttachment {
             b64: "abc".into(),
             description: Some("a cat".into()),
+            mime_type: None,
         }];
         let result = agent.run("What do you see?", &images).await;
         assert_eq!(result, "I see a cat!");
@@ -402,7 +403,7 @@ mod tests {
         let agent = make_agent(vec![], vec![]);
         let messages = vec![
             Message::user_with_images("what is this?", vec![
-                crate::message::ImageAttachment { b64: "abc".into(), description: Some("a cat photo".into()) },
+                crate::message::ImageAttachment { b64: "abc".into(), description: Some("a cat photo".into()), mime_type: None },
             ]),
         ];
         let prompt = agent.format_prompt(&messages);
@@ -417,7 +418,7 @@ mod tests {
         let agent = make_agent(vec![], vec![]);
         let messages = vec![
             Message::user_with_images("look", vec![
-                crate::message::ImageAttachment { b64: "xyz".into(), description: None },
+                crate::message::ImageAttachment { b64: "xyz".into(), description: None, mime_type: None },
             ]),
         ];
         let prompt = agent.format_prompt(&messages);

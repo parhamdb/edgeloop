@@ -6,6 +6,8 @@ pub struct ImageAttachment {
     pub b64: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mime_type: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -60,6 +62,7 @@ mod tests {
         let img = ImageAttachment {
             b64: "abc123".to_string(),
             description: Some("a cat".to_string()),
+            mime_type: None,
         };
         let json = serde_json::to_string(&img).unwrap();
         assert!(json.contains("abc123"));

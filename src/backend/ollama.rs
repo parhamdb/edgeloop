@@ -280,7 +280,7 @@ mod tests {
     #[test]
     fn test_chat_msg_with_images() {
         let msg = crate::message::Message::user_with_images("look", vec![
-            crate::message::ImageAttachment { b64: "abc123".into(), description: Some("photo".into()) },
+            crate::message::ImageAttachment { b64: "abc123".into(), description: Some("photo".into()), mime_type: None },
         ]);
         let chat_msg = ChatMsg::from_message(&msg);
         assert_eq!(chat_msg.content, "photo\nlook");

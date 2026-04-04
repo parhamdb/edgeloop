@@ -5,6 +5,8 @@ use anyhow::Result;
 use crate::cache::CacheStats;
 use crate::message::Message;
 
+pub(crate) mod openai_compat;
+
 #[cfg(feature = "ollama")]
 pub mod ollama;
 #[cfg(feature = "llama-server")]
