@@ -165,7 +165,7 @@ fn generate_tool_schema(tools: &[ToolDef]) -> Value {
 #[derive(Serialize)]
 struct ChatRequest {
     model: String,
-    messages: Vec<Message>,
+    messages: Vec<ApiMessage>,
     stream: bool,
     temperature: f64,
     max_tokens: usize,
@@ -181,6 +181,64 @@ struct ChatRequest {
 #[derive(Serialize)]
 struct StreamOptions {
     include_usage: bool,
+}
+
+// --- Wire types for OpenAI-compatible API ---
+
+#[derive(Serialize)]
+struct ApiMessage {
+    role: String,
+    content: ApiContent,
+}
+
+#[derive(Serialize)]
+#[serde(untagged)]
+enum ApiContent {
+    Text(String),
+    Parts(Vec<ContentPart>),
+}
+
+#[derive(Serialize)]
+#[serde(tag = "type")]
+enum ContentPart {
+    #[serde(rename = "text")]
+    Text { text: String },
+    #[serde(rename = "image_url")]
+    ImageUrl { image_url: ImageUrl },
+}
+
+#[derive(Serialize)]
+struct ImageUrl {
+    url: String,
+}
+
+impl ApiMessage {
+    fn from_message(msg: &Message) -> Self {
+        if msg.images.is_empty() {
+            return Self {
+                role: msg.role.clone(),
+                content: ApiContent::Text(msg.content.clone()),
+            };
+        }
+
+        let mut parts = Vec::new();
+        for img in &msg.images {
+            if let Some(desc) = &img.description {
+                parts.push(ContentPart::Text { text: desc.clone() });
+            }
+            parts.push(ContentPart::ImageUrl {
+                image_url: ImageUrl {
+                    url: format!("data:image/jpeg;base64,{}", img.b64),
+                },
+            });
+        }
+        parts.push(ContentPart::Text { text: msg.content.clone() });
+
+        Self {
+            role: msg.role.clone(),
+            content: ApiContent::Parts(parts),
+        }
+    }
 }
 
 #[derive(Deserialize, Debug)]
@@ -233,7 +291,7 @@ impl Backend for VllmBackend {
         let url = format!("{}/v1/chat/completions", self.endpoint);
         let body = ChatRequest {
             model: self.model.clone(),
-            messages: messages.to_vec(),
+            messages: messages.iter().map(ApiMessage::from_message).collect(),
             stream: true,
             temperature,
             max_tokens,
@@ -679,5 +737,26 @@ mod tests {
         let text = "hello world 1234";
         let count = backend.token_count(text).await.unwrap();
         assert_eq!(count, text.len() / 4);
+    }
+
+    #[test]
+    fn test_api_message_text_only() {
+        let msg = Message::user("hello");
+        let api_msg = ApiMessage::from_message(&msg);
+        let json = serde_json::to_value(&api_msg).unwrap();
+        assert_eq!(json["content"], "hello");
+    }
+
+    #[test]
+    fn test_api_message_with_images() {
+        let msg = Message::user_with_images("look", vec![
+            crate::message::ImageAttachment { b64: "abc".into(), description: Some("photo".into()) },
+        ]);
+        let api_msg = ApiMessage::from_message(&msg);
+        let json = serde_json::to_value(&api_msg).unwrap();
+        let content = &json["content"];
+        assert!(content.is_array());
+        assert_eq!(content.as_array().unwrap().len(), 3); // desc text + image + main text
+        assert_eq!(content[1]["type"], "image_url");
     }
 }
