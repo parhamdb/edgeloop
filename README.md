@@ -116,14 +116,16 @@ JSON protocol (WebSocket/MQTT/sockets):
 ← {"type": "done", "content": "4", "session": "abc"}
 ```
 
-Multimodal messages (images):
+Multimodal messages (images — inline, file path, or URL):
 ```json
 → {"message": "What do you see?", "session": "abc", "images": [
-    {"b64": "/9j/4AAQ...", "description": "Photo from camera", "mime_type": "image/jpeg"}
+    {"b64": "/9j/4AAQ...", "description": "Inline base64"},
+    {"path": "/tmp/photo.jpg", "description": "Local file"},
+    {"url": "http://127.0.0.1:8080/image/42", "description": "HTTP reference"}
   ]}
 ```
 
-Images are supported by Ollama, OpenAI, and vLLM backends. The `description` and `mime_type` fields are optional (defaults to no description and `image/jpeg`). The llama-server backend includes image descriptions as text context.
+Each image needs one of `b64`, `path`, or `url`. Edgeloop resolves file/URL references at request time (reads file or HTTP GET, base64 encodes). Optional fields: `description`, `mime_type` (inferred from extension/content-type if omitted, defaults to `image/jpeg`). Supported by Ollama, OpenAI, and vLLM backends. The llama-server backend includes image descriptions as text context.
 
 ## Feature Flags
 
@@ -205,7 +207,7 @@ All targets: fully static musl binaries.
 
 ```bash
 cargo build                          # debug build
-cargo test --bin edgeloop            # unit tests (71)
+cargo test --bin edgeloop            # unit tests (79)
 cargo test --test integration_test   # integration tests (5, needs Ollama)
 cargo test --test benchmark -- --nocapture  # benchmarks (needs Ollama)
 cargo build --release --features full       # release binary
