@@ -396,4 +396,31 @@ mod tests {
         let conv = agent.conversation.lock().await;
         assert!(conv[0].images.is_empty());
     }
+
+    #[test]
+    fn test_format_prompt_includes_image_descriptions() {
+        let agent = make_agent(vec![], vec![]);
+        let messages = vec![
+            Message::user_with_images("what is this?", vec![
+                crate::message::ImageAttachment { b64: "abc".into(), description: Some("a cat photo".into()) },
+            ]),
+        ];
+        let prompt = agent.format_prompt(&messages);
+        assert!(prompt.contains("a cat photo"), "Prompt should include image description: {}", prompt);
+        assert!(prompt.contains("what is this?"), "Prompt should include message text");
+        // Should NOT contain raw base64 in the prompt
+        assert!(!prompt.contains("abc"), "Raw base64 should not appear in text prompt");
+    }
+
+    #[test]
+    fn test_format_prompt_image_no_description() {
+        let agent = make_agent(vec![], vec![]);
+        let messages = vec![
+            Message::user_with_images("look", vec![
+                crate::message::ImageAttachment { b64: "xyz".into(), description: None },
+            ]),
+        ];
+        let prompt = agent.format_prompt(&messages);
+        assert!(prompt.contains("[Image attached]"), "Should have placeholder: {}", prompt);
+    }
 }
