@@ -1,0 +1,23 @@
+# ROS2 robot agent — communicates over DDS topics (pure Rust, no ROS2 install needed)
+transports = ["ros2"]
+tool_packages = ["tools/filesystem", "tools/system"]
+
+[agent]
+system_prompt = "You are a robot assistant. Describe what you see and help with tasks."
+template = "chatml"
+max_tokens = 4096
+temperature = 0.3
+stream_tokens = true
+parallel_tools = true
+
+[backend]
+type = "ollama"
+endpoint = "http://localhost:11434"
+model = "qwen2.5-coder:7b"
+
+[transport.ros2]
+node_name = "edgeloop"
+namespace = "/novabot"
+topic_in = "brain_request"
+topic_out = "brain_response"
+qos_depth = 10

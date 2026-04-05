@@ -2,7 +2,7 @@
 
 Minimal agentic framework for local LLMs. Single static binary, config-driven, tools as CLI commands.
 
-Deploy a 5MB binary + a TOML config to any edge device. Talks to Ollama, llama-server, or any OpenAI-compatible API. Executes tools as shell commands. Streams responses over CLI, WebSocket, MQTT, or Unix/TCP sockets.
+Deploy a 6MB binary + a TOML config to any edge device. Talks to Ollama, llama-server, vLLM, or any OpenAI-compatible API. Executes tools as shell commands. Streams responses over CLI, WebSocket, MQTT, ROS2, or Unix/TCP sockets.
 
 ## Quick Start
 
@@ -15,7 +15,7 @@ cargo build --release --features full
 
 1. You write a TOML config: which LLM backend, which tools (as shell commands), which I/O transports
 2. edgeloop starts, loads config, connects to the LLM, listens on configured transports
-3. Messages come in (CLI, WebSocket, MQTT, socket), the agent loop calls the LLM, executes tools, returns responses
+3. Messages come in (CLI, WebSocket, MQTT, ROS2, socket), the agent loop calls the LLM, executes tools, returns responses
 4. The repair pipeline fixes broken JSON from small models automatically
 
 ## Config
@@ -32,7 +32,7 @@ temperature = 0.7
 stream_tokens = true         # stream tokens to transport as they arrive (for TTS)
 
 [backend]
-type = "ollama"              # ollama | llama-server | openai
+type = "ollama"              # ollama | llama-server | openai | vllm
 endpoint = "http://localhost:11434"
 model = "qwen2.5-coder:7b"
 
@@ -40,7 +40,7 @@ model = "qwen2.5-coder:7b"
 prompt = "you> "
 ```
 
-See `examples/` for more configs: home automation (MQTT+WS), OpenWrt (minimal), cloud (OpenAI).
+See `examples/` for more configs: home automation (MQTT+WS), OpenWrt (minimal), cloud (OpenAI), ROS2 robot.
 
 ## Tools
 
@@ -190,7 +190,7 @@ Compile only what you need:
 # Default (ollama + llama-server + cli)
 cargo build --release
 
-# Full (all backends + transports) — 5.0MB
+# Full (all backends + transports + ROS2) — 6.0MB
 cargo build --release --features full
 
 # Minimal for OpenWrt

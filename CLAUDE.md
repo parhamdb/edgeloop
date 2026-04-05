@@ -5,7 +5,7 @@ Rust binary — minimal agentic framework for local LLMs. Config-driven, tools a
 ## Project structure
 
 ```
-src/                                    # ~2,500 lines Rust (+1,300 inline tests)
+src/                                    # ~3,500 lines Rust (+1,300 inline tests)
 ├── main.rs                             # clap CLI, config load, wire agent + transports
 ├── lib.rs                              # Public module exports for integration tests
 ├── config.rs                           # TOML structs, ${VAR:-default} env expansion, includes, tool loading
@@ -47,14 +47,15 @@ examples/                               # Example configs
 ├── minimal-openwrt.toml                # CLI + remote llama-server
 ├── cloud-openai.toml                   # CLI + WebSocket + OpenAI API
 ├── local-vllm.toml                     # CLI + vLLM with guided decoding
-└── local-gemma4.toml                   # CLI + Ollama + Gemma 4 26B-A4B
+├── local-gemma4.toml                   # CLI + Ollama + Gemma 4 26B-A4B
+└── ros2-robot.toml                     # ROS2 DDS + Ollama (pure Rust, no ROS2 install)
 ```
 
 ## Building
 
 ```bash
 cargo build                             # debug, default features
-cargo build --release --features full   # all backends + transports (5.0MB)
+cargo build --release --features full   # all backends + transports + ROS2 (6.0MB)
 cargo build --release                   # default: ollama + llama-server + cli (4.4MB)
 cargo test --bin edgeloop               # 85 unit tests
 cargo test --test integration_test      # 5 integration tests (needs Ollama)
@@ -92,4 +93,4 @@ ros2 is included in 'full' — pure Rust DDS via ros2_client, no system dependen
 ## Dependencies
 
 Runtime: tokio, reqwest (rustls), serde/serde_json, toml, clap, regex, tracing, async-trait, futures, anyhow
-Optional: tokio-tungstenite (websocket), rumqttc (mqtt)
+Optional: tokio-tungstenite (websocket), rumqttc (mqtt), ros2-client + ros2-interfaces-jazzy-serde (ros2)
