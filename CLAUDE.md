@@ -67,7 +67,7 @@ cargo test --test benchmark -- --nocapture  # performance benchmarks
 default: ollama, llama-server, cli-transport
 Backends: ollama, llama-server, openai, vllm
 Transports: cli-transport, websocket, mqtt, unix-socket, tcp-socket, ros2
-Separate build: ros2 (pure Rust DDS via ros2_client, not in 'full' feature set)
+ros2 is included in 'full' — pure Rust DDS via ros2_client, no system dependencies
 
 ## Key patterns
 

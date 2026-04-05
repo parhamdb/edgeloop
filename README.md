@@ -159,7 +159,7 @@ Token events use non-blocking `try_send` — if a transport consumer is slow, to
 Native ROS2 via pure Rust DDS (`ros2_client`). No ROS2 installation needed at build or runtime. Communicates over DDS topics using `std_msgs/String` with JSON payloads — same protocol as MQTT/WebSocket.
 
 ```bash
-cargo build --release --features ros2   # separate from 'full'
+cargo build --release --features full   # includes ros2
 ```
 
 ```toml
@@ -199,7 +199,7 @@ cargo build --release --no-default-features --features "llama-server,cli-transpo
 # Home automation
 cargo build --release --no-default-features --features "ollama,mqtt,websocket"
 
-# ROS2 robot (separate feature, not in 'full')
+# ROS2 robot (included in 'full', or standalone)
 cargo build --release --features ros2
 ```
 

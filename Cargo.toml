@@ -17,7 +17,7 @@ mqtt = ["dep:rumqttc"]
 unix-socket = []
 tcp-socket = []
 ros2 = ["dep:ros2-client", "dep:ros2-interfaces-jazzy-serde"]
-full = ["ollama", "llama-server", "openai", "vllm", "cli-transport", "websocket", "mqtt", "unix-socket", "tcp-socket"]
+full = ["ollama", "llama-server", "openai", "vllm", "cli-transport", "websocket", "mqtt", "unix-socket", "tcp-socket", "ros2"]
 
 [dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "process", "io-util", "io-std", "signal", "sync", "time"] }
