@@ -5,7 +5,7 @@ Rust binary — minimal agentic framework for local LLMs. Config-driven, tools a
 ## Project structure
 
 ```
-src/                                    # ~1,700 lines Rust
+src/                                    # ~2,500 lines Rust (+1,300 inline tests)
 ├── main.rs                             # clap CLI, config load, wire agent + transports
 ├── lib.rs                              # Public module exports for integration tests
 ├── config.rs                           # TOML structs, ${VAR:-default} env expansion, includes, tool loading
@@ -18,7 +18,7 @@ src/                                    # ~1,700 lines Rust
 │   ├── mod.rs                          # Backend trait (stream_completion + token_count + last_cache_stats)
 │   ├── openai_compat.rs               # Shared wire types for OpenAI-compatible APIs (multimodal)
 │   ├── ollama.rs                       # /api/chat NDJSON streaming, thinking mode, native images
-│   ├── llama_server.rs                 # /completion SSE, cache_prompt + id_slot, /tokenize
+│   ├── llama_server.rs                 # /completion SSE, cache_prompt + id_slot, /tokenize, image_data multimodal
 │   ├── openai.rs                       # /v1/chat/completions SSE, multimodal content-array
 │   └── vllm.rs                         # vLLM backend: guided decoding, prefix cache stats, multimodal
 └── transport/
@@ -30,7 +30,12 @@ src/                                    # ~1,700 lines Rust
 
 tests/
 ├── integration_test.rs                 # Real Ollama: chat, tool call, file read, no-tool, perf
-└── benchmark.rs                        # Latency across 3 models, tool roundtrip, rapid fire
+├── full_test.rs                        # llama-server backend, parallel tool calls, Gemma 4, multimodal
+├── benchmark.rs                        # Latency across 3 models, tool roundtrip, rapid fire
+├── vllm_integration.rs                 # vLLM backend: chat, tool call, guided decoding
+├── cache_test.rs                       # KV cache reuse, multi-turn context
+├── long_chat_test.rs                   # Extended conversation, history truncation
+└── speculative_bench.rs                # Speculative decoding benchmarks
 
 tools/                                  # Example tool packages
 ├── filesystem/tools.toml               # read_file, write_file, list_dir
@@ -52,6 +57,7 @@ cargo build --release --features full   # all backends + transports (5.0MB)
 cargo build --release                   # default: ollama + llama-server + cli (4.4MB)
 cargo test --bin edgeloop               # 85 unit tests
 cargo test --test integration_test      # 5 integration tests (needs Ollama)
+cargo test --test full_test            # 10 full tests (needs llama-server/Ollama)
 cargo test --test benchmark -- --nocapture  # performance benchmarks
 ```
 

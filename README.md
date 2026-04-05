@@ -71,7 +71,7 @@ Parameters are substituted into the command template. stdout is returned to the 
 | Backend | Config `type` | What it connects to |
 |---------|--------------|-------------------|
 | **Ollama** | `ollama` | Local/remote Ollama server |
-| **llama-server** | `llama-server` | llama.cpp HTTP server with KV cache slot pinning |
+| **llama-server** | `llama-server` | llama.cpp HTTP server with KV cache slot pinning + multimodal |
 | **vLLM** | `vllm` | vLLM server with guided decoding and prefix caching |
 | **OpenAI** | `openai` | OpenAI, Together, Groq, OpenRouter, any compatible API |
 
@@ -204,7 +204,7 @@ src/
 │   ├── mod.rs           # Backend trait
 │   ├── openai_compat.rs # Shared multimodal wire types
 │   ├── ollama.rs        # /api/chat NDJSON streaming, native images
-│   ├── llama_server.rs  # /completion SSE streaming + slot pinning
+│   ├── llama_server.rs  # /completion SSE streaming + slot pinning + image_data
 │   ├── openai.rs        # /v1/chat/completions SSE, multimodal
 │   └── vllm.rs          # vLLM: guided decoding, prefix cache, multimodal
 └── transport/
@@ -235,6 +235,7 @@ All targets: fully static musl binaries.
 cargo build                          # debug build
 cargo test --bin edgeloop            # unit tests (85)
 cargo test --test integration_test   # integration tests (5, needs Ollama)
+cargo test --test full_test          # full tests (10, needs llama-server/Ollama)
 cargo test --test benchmark -- --nocapture  # benchmarks (needs Ollama)
 cargo build --release --features full       # release binary
 ```
