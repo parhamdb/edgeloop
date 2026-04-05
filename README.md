@@ -105,6 +105,7 @@ api_key_env = "OPENAI_API_KEY"
 | **MQTT** | `mqtt` | JSON on pub/sub topics |
 | **Unix socket** | `unix` | Newline-delimited JSON |
 | **TCP socket** | `tcp` | Newline-delimited JSON |
+| **ROS2** | `ros2` | DDS topics, JSON in std_msgs/String |
 
 Multiple transports run simultaneously:
 ```toml
@@ -153,6 +154,34 @@ During tool execution, `tool_call` and `tool_result` events are also streamed:
 
 Token events use non-blocking `try_send` — if a transport consumer is slow, tokens are dropped rather than blocking the LLM stream. The `done` event always contains the complete response.
 
+## ROS2 Transport
+
+Native ROS2 via pure Rust DDS (`ros2_client`). No ROS2 installation needed at build or runtime. Communicates over DDS topics using `std_msgs/String` with JSON payloads — same protocol as MQTT/WebSocket.
+
+```bash
+cargo build --release --features ros2   # separate from 'full'
+```
+
+```toml
+transports = ["ros2"]
+
+[transport.ros2]
+node_name = "edgeloop"
+namespace = "/novabot"
+topic_in = "brain_request"
+topic_out = "brain_response"
+qos_depth = 10
+```
+
+Test with standard ROS2 tools:
+```bash
+# Listen for responses
+ros2 topic echo /novabot/brain_response std_msgs/msg/String
+
+# Send a request
+ros2 topic pub --once /novabot/brain_request std_msgs/msg/String '{"data": "{\"message\": \"hello\", \"session\": \"test\"}"}'
+```
+
 ## Feature Flags
 
 Compile only what you need:
@@ -169,6 +198,9 @@ cargo build --release --no-default-features --features "llama-server,cli-transpo
 
 # Home automation
 cargo build --release --no-default-features --features "ollama,mqtt,websocket"
+
+# ROS2 robot (separate feature, not in 'full')
+cargo build --release --features ros2
 ```
 
 ## Config Features
@@ -212,6 +244,7 @@ src/
     ├── cli.rs           # stdin/stdout REPL
     ├── websocket.rs     # tokio-tungstenite
     ├── mqtt.rs          # rumqttc
+    ├── ros2.rs          # Pure Rust DDS (ros2_client)
     └── socket.rs        # Unix + TCP
 ```
 

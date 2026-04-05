@@ -26,6 +26,7 @@ src/                                    # ~2,500 lines Rust (+1,300 inline tests
     ├── cli.rs                          # stdin/stdout REPL
     ├── websocket.rs                    # tokio-tungstenite, JSON frames
     ├── mqtt.rs                         # rumqttc pub/sub, reconnection
+    ├── ros2.rs                         # Pure Rust DDS via ros2_client, std_msgs/String JSON
     └── socket.rs                       # Unix domain + TCP, newline-delimited JSON
 
 tests/
@@ -65,7 +66,8 @@ cargo test --test benchmark -- --nocapture  # performance benchmarks
 
 default: ollama, llama-server, cli-transport
 Backends: ollama, llama-server, openai, vllm
-Transports: cli-transport, websocket, mqtt, unix-socket, tcp-socket
+Transports: cli-transport, websocket, mqtt, unix-socket, tcp-socket, ros2
+Separate build: ros2 (pure Rust DDS via ros2_client, not in 'full' feature set)
 
 ## Key patterns
 
