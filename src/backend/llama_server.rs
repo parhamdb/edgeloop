@@ -61,12 +61,40 @@ struct TokenizeResponse {
     tokens: Vec<serde_json::Value>,
 }
 
+/// Extract images from messages and replace text markers with [img-N] references.
+/// Returns (modified_prompt, image_data_entries).
+fn extract_image_data(prompt: &str, messages: &[Message]) -> (String, Vec<serde_json::Value>) {
+    let mut image_data_entries: Vec<serde_json::Value> = Vec::new();
+    let mut modified_prompt = prompt.to_string();
+    let mut img_id: usize = 0;
+
+    for msg in messages {
+        for img in &msg.images {
+            let marker = if let Some(desc) = &img.description {
+                format!("[Image: {}]", desc)
+            } else {
+                "[Image attached]".to_string()
+            };
+            if let Some(pos) = modified_prompt.find(&marker) {
+                modified_prompt.replace_range(pos..pos + marker.len(), &format!("[img-{}]", img_id));
+            }
+            image_data_entries.push(serde_json::json!({
+                "data": img.b64,
+                "id": img_id
+            }));
+            img_id += 1;
+        }
+    }
+
+    (modified_prompt, image_data_entries)
+}
+
 #[async_trait]
 impl Backend for LlamaServerBackend {
     fn stream_completion(
         &self,
         prompt: &str,
-        _messages: &[Message],
+        messages: &[Message],
         temperature: f64,
         max_tokens: usize,
         stop: &[String],
@@ -74,8 +102,11 @@ impl Backend for LlamaServerBackend {
         use tokio_stream::wrappers::ReceiverStream;
 
         let url = format!("{}/completion", self.endpoint);
+
+        let (modified_prompt, image_data_entries) = extract_image_data(prompt, messages);
+
         let mut body = serde_json::json!({
-            "prompt": prompt,
+            "prompt": modified_prompt,
             "stream": true,
             "cache_prompt": true,
             "n_predict": max_tokens,
@@ -96,6 +127,9 @@ impl Backend for LlamaServerBackend {
         }
         if let Some(cache_reuse) = self.cache_reuse {
             body["n_cache_reuse"] = serde_json::json!(cache_reuse);
+        }
+        if !image_data_entries.is_empty() {
+            body["image_data"] = serde_json::json!(image_data_entries);
         }
 
         let client = self.client.clone();
@@ -311,6 +345,86 @@ mod tests {
         assert!((t.prompt_ms - 15.0).abs() < f64::EPSILON);
         assert_eq!(t.predicted_n, 10);
         assert!((t.predicted_ms - 50.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_image_data_extraction() {
+        use crate::message::ImageAttachment;
+        let messages = vec![Message {
+            role: "user".into(),
+            content: "Look at this [Image: a cat]".into(),
+            images: vec![ImageAttachment {
+                b64: "AAAA".into(),
+                description: Some("a cat".into()),
+                mime_type: Some("image/png".into()),
+            }],
+        }];
+        let prompt = "User: Look at this [Image: a cat]\nAssistant:";
+        let (modified, entries) = extract_image_data(prompt, &messages);
+        assert_eq!(modified, "User: Look at this [img-0]\nAssistant:");
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0]["id"], 0);
+        assert_eq!(entries[0]["data"], "AAAA");
+    }
+
+    #[test]
+    fn test_no_images_no_image_data() {
+        let messages = vec![Message {
+            role: "user".into(),
+            content: "hello".into(),
+            images: vec![],
+        }];
+        let prompt = "User: hello\nAssistant:";
+        let (modified, entries) = extract_image_data(prompt, &messages);
+        assert_eq!(modified, prompt);
+        assert!(entries.is_empty());
+    }
+
+    #[test]
+    fn test_multiple_images_across_messages() {
+        use crate::message::ImageAttachment;
+        let messages = vec![
+            Message {
+                role: "user".into(),
+                content: "first".into(),
+                images: vec![ImageAttachment {
+                    b64: "IMG1".into(),
+                    description: Some("dog".into()),
+                    mime_type: None,
+                }],
+            },
+            Message {
+                role: "user".into(),
+                content: "second".into(),
+                images: vec![
+                    ImageAttachment {
+                        b64: "IMG2".into(),
+                        description: None,
+                        mime_type: None,
+                    },
+                    ImageAttachment {
+                        b64: "IMG3".into(),
+                        description: Some("bird".into()),
+                        mime_type: None,
+                    },
+                ],
+            },
+        ];
+        let prompt = "User: [Image: dog] first\nUser: [Image attached] [Image: bird] second\nAssistant:";
+        let (modified, entries) = extract_image_data(prompt, &messages);
+        assert!(modified.contains("[img-0]"));
+        assert!(modified.contains("[img-1]"));
+        assert!(modified.contains("[img-2]"));
+        assert!(!modified.contains("[Image: dog]"));
+        assert!(!modified.contains("[Image attached]"));
+        assert!(!modified.contains("[Image: bird]"));
+        assert_eq!(entries.len(), 3);
+        assert_eq!(entries[0]["id"], 0);
+        assert_eq!(entries[1]["id"], 1);
+        assert_eq!(entries[2]["id"], 2);
+        assert_eq!(entries[0]["data"], "IMG1");
+        assert_eq!(entries[1]["data"], "IMG2");
+        assert_eq!(entries[2]["data"], "IMG3");
     }
 
     #[test]
