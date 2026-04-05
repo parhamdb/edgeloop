@@ -97,6 +97,54 @@ mod tests {
         assert!(clean.contains("56088"), "Expected '56088' in: {}", response);
     }
 
+    #[tokio::test]
+    async fn test_llama_server_multimodal_image() {
+        if !llama_server_available() {
+            eprintln!("Skipping: llama-server not running on :8090");
+            return;
+        }
+        let agent_cfg = edgeloop::config::AgentConfig {
+            system_prompt: "You are a helpful assistant. Describe images precisely.".into(),
+            template: "chatml".into(),
+            max_tokens: 4096, max_iterations: 8, max_retries: 2, temperature: 0.1,
+            parallel_tools: false, stream_tokens: false,
+        };
+        let cache_cfg = edgeloop::config::CacheConfig { max_context: 4096, truncation_threshold: 0.8 };
+        let backend_cfg = backend_config("llama-server", "http://localhost:8090", "");
+        let backend = Arc::new(edgeloop::backend::llama_server::LlamaServerBackend::new(&backend_cfg));
+        let agent = edgeloop::agent::Agent::new(backend, vec![], &agent_cfg, &cache_cfg);
+
+        // Create a small 1x1 red PNG (67 bytes) as base64
+        use base64::Engine;
+        let red_pixel_png: [u8; 67] = [
+            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D,
+            0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+            0x08, 0x02, 0x00, 0x00, 0x00, 0x90, 0x77, 0x53, 0xDE, 0x00, 0x00, 0x00,
+            0x0C, 0x49, 0x44, 0x41, 0x54, 0x08, 0xD7, 0x63, 0xF8, 0xCF, 0xC0, 0x00,
+            0x00, 0x00, 0x03, 0x00, 0x01, 0x36, 0x28, 0x19, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+        ];
+        let b64 = base64::engine::general_purpose::STANDARD.encode(&red_pixel_png);
+
+        let images = vec![edgeloop::message::ImageAttachment {
+            b64,
+            description: Some("a small red image".into()),
+            mime_type: Some("image/png".into()),
+        }];
+
+        let response = agent.run("What do you see in this image? Describe it.", &images, None, "test").await;
+        println!("[llama-server multimodal] {}", response);
+        // The model should produce some response about the image rather than saying it can't see anything
+        assert!(!response.is_empty(), "Response should not be empty");
+        // Should NOT contain the typical "I can't see" fallback from text-only mode
+        let lower = response.to_lowercase();
+        assert!(
+            !lower.contains("i don't have") && !lower.contains("i cannot see") && !lower.contains("no image"),
+            "Model appears to not have received the image: {}",
+            response
+        );
+    }
+
     // ─── Ollama parallel tool calls ─────────────────────────────────
 
     fn ollama_available() -> bool {
