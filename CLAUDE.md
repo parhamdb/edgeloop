@@ -50,7 +50,7 @@ examples/                               # Example configs
 cargo build                             # debug, default features
 cargo build --release --features full   # all backends + transports (5.0MB)
 cargo build --release                   # default: ollama + llama-server + cli (4.4MB)
-cargo test --bin edgeloop               # 82 unit tests
+cargo test --bin edgeloop               # 85 unit tests
 cargo test --test integration_test      # 5 integration tests (needs Ollama)
 cargo test --test benchmark -- --nocapture  # performance benchmarks
 ```
@@ -67,7 +67,7 @@ Transports: cli-transport, websocket, mqtt, unix-socket, tcp-socket
 - Backend trait: `stream_completion()` returns `BoxStream<Result<String>>`, `token_count()`, `last_cache_stats()`.
 - Transport trait: `serve(handler)` — handler is `Arc<dyn Fn(TransportRequest)>`.
 - Non-CLI transports use JSON protocol: `{"message":"...","session":"..."}` → `{"type":"done","content":"...","session":"..."}`.
-- Multimodal images: incoming requests include `"images": [...]` with `b64`, `path` (local file), or `url` (HTTP) references. Transports call `resolve_images()` to convert path/url → base64 before passing to agent. OpenAI/vLLM use content-array format, Ollama uses native `images` field, llama-server degrades to text descriptions. Shared wire types in `backend/openai_compat.rs`.
+- Multimodal images: incoming requests include `"images": [...]` with `b64`, `path` (local file), or `url` (HTTP) references. Transports call `resolve_images()` to convert path/url → base64 before passing to agent. OpenAI/vLLM use content-array format, Ollama uses native `images` field, llama-server uses `image_data` array on `/completion` with `[img-N]` prompt markers (requires `--mmproj` flag). Shared wire types in `backend/openai_compat.rs`.
 - MQTT `max_packet_size` is configurable via `[transport.mqtt]` for large multimodal payloads.
 - Repair pipeline: `repair_tool_calls()` handles single `{...}` and array `[{...}, ...]`; delegates to `parse_single_tool_call()`. Fuzzy match via Levenshtein, positional arg coercion. Legacy `repair_tool_call()` returns the first result.
 - Agent loop: build prompt → stream backend → repair → tool(s) or return. Append-only history.

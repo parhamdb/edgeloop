@@ -126,7 +126,7 @@ Multimodal messages (images — inline, file path, or URL):
   ]}
 ```
 
-Each image needs one of `b64`, `path`, or `url`. Edgeloop resolves file/URL references at request time (reads file or HTTP GET, base64 encodes). Optional fields: `description`, `mime_type` (inferred from extension/content-type if omitted, defaults to `image/jpeg`). Supported by Ollama, OpenAI, and vLLM backends. The llama-server backend includes image descriptions as text context.
+Each image needs one of `b64`, `path`, or `url`. Edgeloop resolves file/URL references at request time (reads file or HTTP GET, base64 encodes). Optional fields: `description`, `mime_type` (inferred from extension/content-type if omitted, defaults to `image/jpeg`). Supported by all backends: Ollama (native `images` field), OpenAI/vLLM (content-array format), and llama-server (`image_data` on `/completion` — requires `--mmproj` flag).
 
 ## Token Streaming
 
@@ -233,7 +233,7 @@ All targets: fully static musl binaries.
 
 ```bash
 cargo build                          # debug build
-cargo test --bin edgeloop            # unit tests (82)
+cargo test --bin edgeloop            # unit tests (85)
 cargo test --test integration_test   # integration tests (5, needs Ollama)
 cargo test --test benchmark -- --nocapture  # benchmarks (needs Ollama)
 cargo build --release --features full       # release binary
