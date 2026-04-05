@@ -13,6 +13,8 @@ pub mod websocket;
 pub mod mqtt;
 #[cfg(any(feature = "unix-socket", feature = "tcp-socket"))]
 pub mod socket;
+#[cfg(feature = "ros2")]
+pub mod ros2;
 
 pub struct TransportRequest {
     pub message: String,
@@ -69,6 +71,14 @@ pub fn create_transports(config: &crate::config::Config) -> Result<Vec<Box<dyn T
                     transports.push(Box::new(socket::TcpSocketTransport::new(cfg)));
                 } else {
                     tracing::warn!("Transport 'tcp-socket' requested but [transport.tcp] config is missing");
+                }
+            }
+            #[cfg(feature = "ros2")]
+            "ros2" => {
+                if let Some(cfg) = config.transport.ros2.clone() {
+                    transports.push(Box::new(ros2::Ros2Transport::new(cfg)));
+                } else {
+                    tracing::warn!("Transport 'ros2' requested but [transport.ros2] config is missing");
                 }
             }
             other => { tracing::warn!("Transport '{}' not implemented or not compiled in", other); }

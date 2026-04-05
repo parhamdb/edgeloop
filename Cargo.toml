@@ -16,6 +16,7 @@ websocket = ["dep:tokio-tungstenite"]
 mqtt = ["dep:rumqttc"]
 unix-socket = []
 tcp-socket = []
+ros2 = ["dep:ros2-client", "dep:ros2-interfaces-jazzy-serde"]
 full = ["ollama", "llama-server", "openai", "vllm", "cli-transport", "websocket", "mqtt", "unix-socket", "tcp-socket"]
 
 [dependencies]
@@ -38,6 +39,8 @@ base64 = "0.22"
 
 tokio-tungstenite = { version = "0.24", optional = true }
 rumqttc = { version = "0.24", optional = true }
+ros2-client = { version = "0.8", optional = true }
+ros2-interfaces-jazzy-serde = { version = "0.0.4", optional = true, features = ["std_msgs"] }
 
 [dev-dependencies]
 tokio-test = "0.4"

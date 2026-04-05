@@ -159,6 +159,8 @@ pub struct TransportConfigs {
     pub unix: Option<UnixTransportConfig>,
     #[serde(default)]
     pub tcp: Option<TcpTransportConfig>,
+    #[serde(default)]
+    pub ros2: Option<Ros2TransportConfig>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -201,6 +203,18 @@ pub struct TcpTransportConfig {
     #[serde(default = "default_tcp_host")]
     pub host: String,
     pub port: u16,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct Ros2TransportConfig {
+    pub topic_in: String,
+    pub topic_out: String,
+    #[serde(default = "default_ros2_node_name")]
+    pub node_name: String,
+    #[serde(default = "default_ros2_namespace")]
+    pub namespace: String,
+    #[serde(default = "default_ros2_qos_depth")]
+    pub qos_depth: usize,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -250,6 +264,9 @@ fn default_ws_path() -> String { "/agent".into() }
 fn default_mqtt_client_id() -> String { "edgeloop-01".into() }
 fn default_mqtt_qos() -> u8 { 1 }
 fn default_tcp_host() -> String { "127.0.0.1".into() }
+fn default_ros2_node_name() -> String { "edgeloop".into() }
+fn default_ros2_namespace() -> String { "/".into() }
+fn default_ros2_qos_depth() -> usize { 10 }
 fn default_timeout() -> u64 { 10 }
 fn default_true() -> bool { true }
 
