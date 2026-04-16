@@ -24,12 +24,37 @@ impl Transport for Ros2Transport {
     fn name(&self) -> &str { "ros2" }
 
     async fn serve(&self, handler: RequestHandler) -> Result<()> {
-        use ros2_client::{Context, MessageTypeName, Name, NodeName, NodeOptions};
+        use ros2_client::{Context, ContextOptions, MessageTypeName, Name, NodeName, NodeOptions};
+        use ros2_client::rustdds::{
+            QosPolicyBuilder,
+            policy::{Deadline, Durability, History, Lifespan, Ownership, Reliability},
+            Duration,
+        };
         use ros2_interfaces_jazzy_serde::std_msgs;
         use futures::StreamExt;
 
+        let depth = self.config.qos_depth;
+        let sub_qos = QosPolicyBuilder::new()
+            .durability(Durability::Volatile)
+            .deadline(Deadline(Duration::INFINITE))
+            .ownership(Ownership::Shared)
+            .reliability(Reliability::Reliable { max_blocking_time: Duration::from_millis(100) })
+            .history(History::KeepLast { depth: depth as i32 })
+            .lifespan(Lifespan { duration: Duration::INFINITE })
+            .build();
+        let pub_qos = QosPolicyBuilder::new()
+            .durability(Durability::Volatile)
+            .deadline(Deadline(Duration::INFINITE))
+            .ownership(Ownership::Shared)
+            .reliability(Reliability::Reliable { max_blocking_time: Duration::from_millis(100) })
+            .history(History::KeepLast { depth: depth as i32 })
+            .lifespan(Lifespan { duration: Duration::INFINITE })
+            .build();
+
         // Create DDS context and node
-        let context = Context::new()?;
+        let context = Context::with_options(
+            ContextOptions::new().domain_id(self.config.domain_id),
+        )?;
         let mut node = context.new_node(
             NodeName::new(&self.config.namespace, &self.config.node_name)
                 .map_err(|e| anyhow::anyhow!("Invalid ROS2 node name: {:?}", e))?,
@@ -41,7 +66,7 @@ impl Transport for Ros2Transport {
             &Name::new(&self.config.namespace, &self.config.topic_in)
                 .map_err(|e| anyhow::anyhow!("Invalid ROS2 topic name: {:?}", e))?,
             MessageTypeName::new("std_msgs", "String"),
-            &ros2_client::DEFAULT_SUBSCRIPTION_QOS,
+            &sub_qos,
         )?;
         let subscription = node.create_subscription::<std_msgs::msg::String>(
             &topic_in, None,
@@ -52,15 +77,16 @@ impl Transport for Ros2Transport {
             &Name::new(&self.config.namespace, &self.config.topic_out)
                 .map_err(|e| anyhow::anyhow!("Invalid ROS2 topic name: {:?}", e))?,
             MessageTypeName::new("std_msgs", "String"),
-            &ros2_client::DEFAULT_PUBLISHER_QOS,
+            &pub_qos,
         )?;
         let publisher = node.create_publisher::<std_msgs::msg::String>(
             &topic_out, None,
         )?;
 
         tracing::info!(
-            "ROS2 transport started: node={}{}, subscribe={}, publish={}",
+            "ROS2 transport started: node={}{}, domain_id={}, subscribe={}, publish={}",
             self.config.namespace, self.config.node_name,
+            self.config.domain_id,
             self.config.topic_in, self.config.topic_out,
         );
 

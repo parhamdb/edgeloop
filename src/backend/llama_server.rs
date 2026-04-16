@@ -54,6 +54,8 @@ struct Timings {
     predicted_n: usize,
     #[serde(default)]
     predicted_ms: f64,
+    #[serde(default)]
+    cache_n: usize,
 }
 
 #[derive(Deserialize)]
@@ -209,7 +211,7 @@ impl Backend for LlamaServerBackend {
                                         generated_tokens: timings.predicted_n,
                                         prefill_ms: timings.prompt_ms,
                                         generation_ms: timings.predicted_ms,
-                                        cache_hit_tokens: 0,
+                                        cache_hit_tokens: timings.cache_n,
                                     };
                                     if let Ok(mut guard) = stats_ref.lock() {
                                         *guard = Some(stats);
@@ -337,7 +339,7 @@ mod tests {
 
     #[test]
     fn test_stop_chunk_with_timings() {
-        let raw = r#"{"content":"","stop":true,"timings":{"prompt_n":42,"prompt_ms":15.0,"predicted_n":10,"predicted_ms":50.0}}"#;
+        let raw = r#"{"content":"","stop":true,"timings":{"prompt_n":42,"prompt_ms":15.0,"predicted_n":10,"predicted_ms":50.0,"cache_n":30}}"#;
         let chunk: CompletionChunk = serde_json::from_str(raw).unwrap();
         assert!(chunk.stop);
         let t = chunk.timings.unwrap();
@@ -345,6 +347,7 @@ mod tests {
         assert!((t.prompt_ms - 15.0).abs() < f64::EPSILON);
         assert_eq!(t.predicted_n, 10);
         assert!((t.predicted_ms - 50.0).abs() < f64::EPSILON);
+        assert_eq!(t.cache_n, 30);
     }
 
     #[test]

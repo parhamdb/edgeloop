@@ -215,6 +215,8 @@ pub struct Ros2TransportConfig {
     pub namespace: String,
     #[serde(default = "default_ros2_qos_depth")]
     pub qos_depth: usize,
+    #[serde(default = "default_ros2_domain_id")]
+    pub domain_id: u16,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -267,6 +269,12 @@ fn default_tcp_host() -> String { "127.0.0.1".into() }
 fn default_ros2_node_name() -> String { "edgeloop".into() }
 fn default_ros2_namespace() -> String { "/".into() }
 fn default_ros2_qos_depth() -> usize { 10 }
+fn default_ros2_domain_id() -> u16 {
+    std::env::var("ROS_DOMAIN_ID")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0)
+}
 fn default_timeout() -> u64 { 10 }
 fn default_true() -> bool { true }
 
